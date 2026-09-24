@@ -93,7 +93,7 @@ export class UI {
       h('div', { class: 'title-btns' },
         save ? h('button', { class: 'btn big primary', onclick: () => this.continueGame() }, img('heart'), 'Continue') : null,
         h('button', { class: 'btn big ' + (save ? '' : 'primary'), onclick: () => save ? this.confirmNew(save) : this.startAdopt() }, img('paw'), save ? 'New Pet' : 'Meet Your Pet'),
-        save ? h('button', { class: 'btn small danger-ghost', onclick: () => this.confirmReset(true) }, 'Reset Save') : null,
+        save ? h('button', { class: 'btn small', onclick: () => this.confirmReset(true) }, 'Reset Save') : null,
       ),
     );
     this.modalRoot.innerHTML = '';
@@ -343,7 +343,9 @@ export class UI {
     );
     this.bottom.append(bar);
     if (g.toys.active) {
-      this.bottom.prepend(h('div', { class: 'toy-chip' }, img(g.toys.active, 'ic small'), h('span', {}, toyDef(g.toys.active).hint),
+      const act = { ball: 'Throw!', squeaky: 'Throw!', wand: 'Wiggle!', bubbles: 'Blow!' }[g.toys.active];
+      this.bottom.prepend(h('div', { class: 'toy-chip' }, img(g.toys.active, 'ic small'), h('span', { class: 'chip-hint' }, toyDef(g.toys.active).hint),
+        h('button', { class: 'btn small primary', onclick: () => g.toys.quickAction() }, act),
         h('button', { class: 'btn small', onclick: () => { g.toys.clear(); this.refresh(); } }, 'Put away')));
     }
   }
@@ -413,13 +415,15 @@ export class UI {
       panel.append(row);
       if (cu.food) panel.append(h('button', { class: 'btn primary', onclick: () => cu.giveFood() }, 'Give it! ♥'));
     } else if (cu.sub === 'brush') {
-      panel.append(h('p', { class: 'panel-tip' }, 'Drag the brush through the fur — or tap your pet to brush.'));
+      panel.append(h('p', { class: 'panel-tip' }, 'Drag the brush through the fur!'), h('button', { class: 'btn primary', onclick: () => cu.autoTool() }, img('brush', 'ic small'), 'Brush'));
     } else if (cu.sub === 'bath') {
       const stages = ['Soap', 'Rinse', 'Shake!', 'Dry'];
       const icons = ['soap', 'shower', 'water', 'towel'];
       panel.append(h('div', { class: 'stages' }, ...stages.map((st, i) => h('div', { class: 'stage' + (cu.bathStage === i ? ' on' : cu.bathStage > i ? ' done' : '') }, img(icons[i], 'ic small'), st))));
       const tips = ['Scrub bubbles all over!', 'Rinse the bubbles away!', 'Look out, SHAKE!', 'Dry off with the towel!', 'All clean!'];
       panel.append(h('p', { class: 'panel-tip' }, tips[cu.bathStage] ?? ''));
+      const acts = ['Scrub', 'Rinse', '', 'Dry'];
+      if (acts[cu.bathStage]) panel.append(h('button', { class: 'btn primary', onclick: () => cu.autoTool() }, img(icons[cu.bathStage], 'ic small'), acts[cu.bathStage]));
     } else if (cu.sub === 'tricks') {
       const t = cu.trick;
       if (t.phase === 'reward') {

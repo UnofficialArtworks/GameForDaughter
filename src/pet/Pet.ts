@@ -144,7 +144,7 @@ export class Pet {
       }
     }
     // hop physics
-    if (this.z > 0 || this.vz > 0) {
+    if (!this.carried && (this.z > 0 || this.vz > 0)) {
       this.vz -= 1300 * dt;
       this.z += this.vz * dt;
       if (this.z <= 0) {

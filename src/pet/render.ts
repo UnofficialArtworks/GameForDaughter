@@ -323,6 +323,8 @@ function computeLegs(p: Pose, B: BodyPreset, toL: (x: number, y: number) => [num
       fx = lerp(fx, rx, p.paw); fy = lerp(fy, ry, p.paw);
       L.raised = true;
     }
+    // airborne: feet travel with the body and dangle a little
+    if (p.hop > 0.5) { fy -= p.hop; fx += (c.front ? 4 : -4) * Math.min(1, p.hop / 60); }
     L.hx = hx; L.hy = hy; L.fx = fx; L.fy = fy;
   }
   return LEGS;

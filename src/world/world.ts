@@ -67,9 +67,12 @@ export class World {
   }
 
   /** Local hour; `?hour=13` in the URL overrides it (handy for testing day/night). */
+  private hourQ = new URLSearchParams(location.search).get('hour');
+  private hourCache = { h: 12, t: -1 };
   hour() {
-    const q = new URLSearchParams(location.search).get('hour');
-    return q !== null && !isNaN(+q) ? +q : new Date().getHours();
+    if (this.hourQ !== null && !isNaN(+this.hourQ)) return +this.hourQ;
+    if (this.time - this.hourCache.t > 30 || this.hourCache.t < 0) { this.hourCache.t = this.time; this.hourCache.h = new Date().getHours(); }
+    return this.hourCache.h;
   }
   isNight() { const h = this.hour(); return h >= 20 || h < 6; }
   isEvening() { const h = this.hour(); return h >= 17 && h < 20; }

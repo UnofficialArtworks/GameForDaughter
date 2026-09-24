@@ -94,6 +94,7 @@ export class MiniGames {
       }
       if (g.pet.actionName !== 'toy') g.pet.run(g.toys.playLoop(), 'toy', 2);
     }
+    if (this.id === 'sniff' && !g.pet.action) g.pet.run((function* (): Gen { g.pet.lookCam = 1; g.pet.body = 'sit'; g.pet.expr = 'excited'; g.pet.o.tailWag = 1; while (true) yield; })(), 'mini', 1);
     if (this.marker) { this.marker.t -= dt; if (this.marker.t <= 0) this.marker = null; }
   }
 

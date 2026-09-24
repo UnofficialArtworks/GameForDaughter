@@ -585,6 +585,30 @@ function makeBehaviors(b: Brain): Behavior[] {
         yield* wait(pet, 2);
       },
     },
+    {
+      // stalk & pounce on the player's pointer / last touch
+      id: 'stalkPointer', cd: 30, w: (b) => {
+        const p = g.pointer;
+        if (!p.recent || p.wy < 440 || g.world.zoneOf(p.wx) !== g.zone) return 0;
+        return (b.mood === 'mischievous' || b.mood === 'playful' ? 1.2 : 0.3) * (0.5 + b.tr.playful);
+      },
+      run: function* () {
+        const pet = P();
+        const tx = g.pointer.wx, ty = Math.max(g.pointer.wy, 470);
+        pet.lookAt = { x: tx, y: ty }; pet.expr = 'mischief';
+        yield* walk(pet, tx - Math.sign(tx - pet.x || 1) * 160, ty, 120, 4);
+        pet.faceToward(tx);
+        pet.body = 'crouch'; pet.expr = 'focus'; pet.o.tailWag = 1.2;
+        let t = 0;
+        while (t < 1.3) { t += pet.dt; pet.o.tilt = Math.sin(t * 25) * 0.04; pet.lookAt = { x: g.pointer.wx, y: g.pointer.wy }; yield; }
+        pet.o = {}; pet.body = 'stand';
+        pet.jump(330); pet.moveTo(g.pointer.wx, Math.max(g.pointer.wy, 470), 330); g.audio.boing();
+        yield* wait(pet, 0.6);
+        pet.expr = 'joy'; pet.lookCam = 1; g.audio.voice('giggle');
+        g.observe('pounce');
+        yield* wait(pet, 1);
+      },
+    },
     // ---------- surprises (rare) ----------
     { id: 'sneeze', cd: 200, w: () => 0.06, run: function* () { yield* sneeze(P()); } },
     {

@@ -40,7 +40,27 @@ export class Toys {
     if (this.active || (kind !== 'ball' && kind !== 'squeaky')) return;
     this.active = kind as 'ball' | 'squeaky';
     this.thr = { kind: kind as 'ball' | 'squeaky', x, y, z: 30, vx: 0, vy: 0, vz: 60, grabbed: false, carried: false, squash: 0, rest: 0 };
+    this.g.ui.refresh();
     if (invite) this.g.hint('toyInvite', 'Your pet brought you a toy! Flick it to throw!');
+  }
+
+  /** One-button play for keyboard / limited motor control. */
+  quickAction() {
+    const g = this.g;
+    g.audio.unlock();
+    if (this.thr && !this.thr.carried && !this.thr.grabbed) {
+      const b = g.world.zoneBounds(g.zone), t = this.thr;
+      const tx = rand(b.x0 + 60, b.x1 - 60), ty = rand(b.y0, b.y1);
+      t.vx = (tx - t.x) / 0.9; t.vy = (ty - t.y) / 0.9; t.vz = 500; t.z = Math.max(t.z, 5);
+      if (t.kind === 'squeaky') { t.squash = 1; g.audio.squeak(); }
+      this.onThrow();
+    } else if (this.active === 'wand') {
+      const p = g.pet;
+      this.wand.tx = p.x + rand(-220, 220); this.wand.ty = p.y - rand(40, 200); this.wand.idle = 0;
+    } else if (this.active === 'bubbles') {
+      const [hx, hy] = g.pet.headPos();
+      this.blow(hx + rand(-150, 150), hy - rand(20, 120), 4);
+    }
   }
 
   clear() {

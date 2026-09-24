@@ -366,6 +366,9 @@ export class CloseUp {
   }
 
   autoPet(zone: string) { this.auto = { zone, t: 0 }; }
+  private autoToolT = 0;
+  /** Button-driven tool use (brush / bath stages) for players who can't drag precisely. */
+  autoTool() { if (this.tool) this.autoToolT = 1.6; }
 
   // ---------- input ----------
   onDown(wx: number, wy: number, id: number): boolean {
@@ -474,6 +477,7 @@ export class CloseUp {
     this.highFiveFlash = Math.max(0, this.highFiveFlash - dt);
     if (g.mode !== 'closeup') return;
     const pet = g.pet;
+    if (!pet.action) pet.run(this.idleLoop(false), 'closeup', 2);
     // accessibility: auto-stroke a spot
     if (this.auto) {
       const a = this.auto;
@@ -494,7 +498,16 @@ export class CloseUp {
       this.food.x += (mx + 10 * pet.facing - this.food.x) * Math.min(1, dt * 3);
       this.food.y += (my + 48 - this.food.y) * Math.min(1, dt * 3);
     }
-    if (this.tool && !this.tool.drag) {
+    if (this.autoToolT > 0 && this.tool) {
+      this.autoToolT -= dt;
+      const t = this.tool, a = g.time * 6;
+      const cx = pet.x, cy = pet.y - 110 * pet.depth;
+      const nx = cx + Math.cos(a) * 55 * pet.depth, ny = cy + Math.sin(a * 0.5) * 45 * pet.depth - (t.kind === 'shower' ? 60 : 0);
+      const d = Math.hypot(nx - t.x, ny - t.y);
+      t.x = nx; t.y = ny;
+      this.toolWork(nx, ny, Math.min(d, 30));
+      if (!this.tool) this.autoToolT = 0;
+    } else if (this.tool && !this.tool.drag) {
       const r = this.restPos();
       this.tool.x += (r.x - this.tool.x) * Math.min(1, dt * 6);
       this.tool.y += (r.y - this.tool.y) * Math.min(1, dt * 6);

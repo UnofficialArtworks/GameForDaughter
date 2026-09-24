@@ -88,6 +88,7 @@ button { font: inherit; color: inherit; }
 .bar-btn:hover .ic { transform: rotate(-8deg) scale(1.08); }
 .bar-btn.active { background: var(--mint); }
 .bar-btn.locked { opacity: 0.5; }
+@media (max-width: 560px) { .chip-hint { display: none; } }
 .toy-chip { display: flex; align-items: center; gap: 8px; background: var(--card); padding: 6px 6px 6px 12px; border-radius: 999px; box-shadow: var(--shadow); font-weight: 700; font-size: 0.9em; }
 
 .tray {
@@ -288,3 +289,13 @@ h4 { margin: 16px 0 8px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 html.reduced *, html.reduced *::before, html.reduced *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 
+.btn .ic.tiny { width: 18px; height: 18px; }
+/* short landscape screens (phones on their side): close-up controls go in a side column */
+@media (max-height: 520px) and (min-aspect-ratio: 4/3) {
+  #ui.closeup .hud-bottom { align-items: flex-end; top: 64px; justify-content: flex-end; }
+  #ui.closeup .close-ui { width: min(46vw, 400px); }
+  #ui.closeup .tabs { flex-wrap: wrap; border-radius: 22px; }
+  #ui.closeup .tab { flex: 1 1 30%; min-height: 40px; }
+  #ui.closeup .tab span { display: none; }
+  .hint { font-size: .85em; padding: 8px 12px; }
+}

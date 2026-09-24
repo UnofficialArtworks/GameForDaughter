@@ -267,7 +267,7 @@ export class Game {
     if (after > before) this.levelUp(after);
     this.ui.bumpFriend();
     // twinkles trickle from genuine play, with diminishing returns
-    if (chance(Math.min(0.5, gain * 0.12))) this.earn(1);
+    if (chance(Math.min(0.6, gain * 0.2))) this.earn(1);
   }
 
   private levelUp(lvl: number) {
