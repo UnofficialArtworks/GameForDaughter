@@ -278,6 +278,7 @@ export class UI {
   // ---------- HUD ----------
   clearHud() {
     this.top.innerHTML = ''; this.bottom.innerHTML = ''; this.closeTray(); this.miniHud.innerHTML = ''; this.miniHud.className = 'mini-hud';
+    this.root.classList.remove('closeup', 'minigame');
   }
 
   refresh() {
@@ -285,6 +286,7 @@ export class UI {
     if (g.mode === 'title' || g.mode === 'adopt') { this.clearHud(); return; }
     this.renderTop();
     this.root.classList.toggle('closeup', g.mode === 'closeup');
+    this.root.classList.toggle('minigame', g.mode === 'minigame');
     this.bottom.innerHTML = '';
     this.closeTray();
     if (g.mode === 'free') this.renderFreeBar();
@@ -455,16 +457,20 @@ export class UI {
     this.miniHud.innerHTML = '';
     this.miniHud.append(
       h('div', { class: 'mini-title' }, m.id === 'bubbles' ? 'Bubble Party!' : 'Treasure Sniff!'),
-      h('div', { class: 'mini-tip' }, m.id === 'bubbles' ? 'Pop bubbles together! Gold = 5' : 'Tap the grass — your pet will sniff for treasure!'),
+      h('div', { class: 'mini-tip' + (m.tipHeat >= 0 ? ' heat' + m.tipHeat : ''), 'aria-live': 'polite' }, m.tip),
       h('div', { class: 'mini-bar' }, h('div', { class: 'mini-fill' })),
       h('div', { class: 'mini-score' }, img(m.id === 'bubbles' ? 'bubbles' : 'dig', 'ic small'), h('span', { class: 'score-n' }, '0')),
       h('button', { class: 'btn small', onclick: () => m.end() }, 'Finish'),
     );
   }
 
-  miniHint(text: string) {
+  miniHint(text: string, heat = -1) {
     const el = this.miniHud.querySelector('.mini-tip');
-    if (el) el.textContent = text;
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'mini-tip' + (heat >= 0 ? ' heat' + heat : '');
+    // restart the little pop so each new clue is noticed
+    void (el as HTMLElement).offsetWidth; el.classList.add('pop');
   }
 
   miniResult(id: string, score: number, reward: number, best: boolean, petScore: number) {

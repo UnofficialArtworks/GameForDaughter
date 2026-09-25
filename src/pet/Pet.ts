@@ -59,9 +59,11 @@ export class Pet {
   lookCam = 0; // 0..1 how much to face the camera
   private glance = { x: 0, y: 0, t: 0 };
   private blinkT = 2; private blinkPhase = 0;
-  private earN = new Spring(90, 7); private earF = new Spring(80, 6);
+  // ears [left, right] in pet-local space: a stiff base that follows the head and a soft tip that lags
+  private earBase = [new Spring(240, 17), new Spring(240, 17)];
+  private earTip = [new Spring(80, 6.5), new Spring(80, 6.5)];
+  private earPrev = { x: 0, y: 0, r: 0, vx: 0, vy: 0, facing: 1, ok: false };
   private squashS = new Spring(260, 14);
-  private lastHeadY = 0;
   // bubbles
   emoteK: EmoteKind | null = null; emoteT = 0;
   thought: string | null = null; thoughtT = 0;
@@ -195,7 +197,9 @@ export class Pet {
       const def = k === 'eyeOpen' || k === 'pupil' ? 1 : k === 'tailUp' ? 0.5 : 0;
       p[k] = damp(p[k] as number, tgt(k, def), k === 'eyeOpen' ? 14 : 10, dt) as never;
     }
-    p.special = (o.special ?? ex.special ?? 0) as number;
+    const special = (o.special ?? ex.special ?? 0) as number;
+    if (special !== p.special) { p.special = special; p.eyePop = this.g.settings.reducedMotion ? 1 : 0; }
+    p.eyePop = Math.min(1, p.eyePop + dt * 5);
     // walking lifts tail & perks ears
     if (p.walk > 0.3) { p.tailUp = Math.max(p.tailUp, 0.65); }
     // squash spring
@@ -232,14 +236,7 @@ export class Pet {
     // subtle head tilt toward look target when it's above/below
     if (!('headTilt' in o) && !ex.headTilt) p.headTilt = damp(p.headTilt, clamp(ly * 0.12, -0.15, 0.15), 5, dt);
 
-    // ---------- ears & secondary motion ----------
-    const headVy = (hy - this.lastHeadY) / Math.max(dt, 0.001);
-    this.lastHeadY = hy;
-    if (Math.abs(headVy) < 3000) { this.earN.v += headVy * 0.02; this.earF.v += headVy * 0.018; }
-    if (chance(dt * 0.25)) (chance(0.5) ? this.earN : this.earF).v += rand(-6, 6); // ear twitch
-    if (p.shake > 0.1) { this.earN.v += Math.sin(p.time * 40) * 8; this.earF.v += Math.cos(p.time * 40) * 8; }
-    p.earSwingN = this.earN.update(0, dt);
-    p.earSwingF = this.earF.update(0, dt);
+    this.updateEars(dt, hx, hy);
 
     // footsteps
     if (p.walk > 0.2) {
@@ -249,6 +246,56 @@ export class Pet {
 
     if (this.emoteT > 0) { this.emoteT -= dt; if (this.emoteT <= 0) this.emoteK = null; }
     if (this.thoughtT > 0) { this.thoughtT -= dt; if (this.thoughtT <= 0) this.thought = null; }
+  }
+
+  /**
+   * Ear secondary motion. Last frame's head movement drives two springs per ear: the base
+   * follows the head firmly, the tip lags behind and settles with a gentle overshoot.
+   * Speed changes are applied as impulses, so the feel doesn't depend on the frame rate.
+   */
+  private updateEars(dt: number, hx: number, hy: number) {
+    const p = this.pose, e = this.earPrev, s = this.depth, hr = this.rig.hrot;
+    if (e.ok && e.facing !== this.facing) {
+      // turned around: mirror the ear state so the motion stays continuous on screen
+      for (const [a, b] of [this.earBase, this.earTip]) {
+        [a.x, b.x] = [-b.x, -a.x];
+        [a.v, b.v] = [-b.v, -a.v];
+      }
+      e.ok = false;
+    }
+    if (e.ok && dt > 0 && Math.hypot(hx - e.x, hy - e.y) < 150) {
+      const vx = clamp(((hx - e.x) / dt) * this.facing / s, -1400, 1400);
+      const vy = clamp((hy - e.y) / dt / s, -1400, 1400);
+      const ax = vx - e.vx, ay = vy - e.vy, dr = clamp(hr - e.r, -0.5, 0.5);
+      // turning around swings the head sideways fast; that shouldn't whip the ears out like wings
+      const turn = this.turnP < 1 ? 0.35 : 1;
+      for (let i = 0; i < 2; i++) {
+        const side = i ? 1 : -1;
+        const B = this.earBase[i], T = this.earTip[i];
+        // sideways: inertia when the head speeds up or stops, plus a little trailing drag
+        B.v += clamp(-ax * 0.006, -0.8, 0.8) * turn - vx * 0.05 * dt;
+        T.v += clamp(-ax * 0.022, -2.6, 2.6) * turn - vx * 0.06 * dt;
+        // up/down: falling lets them float outward, a sudden stop slaps them back down
+        T.v += side * clamp(ay * 0.012, -3, 5);
+        B.v += side * clamp(ay * 0.003, -1, 1.5);
+        // head tilt: the hanging tip keeps its angle for a moment, then catches up
+        T.x -= dr * 0.25; B.x -= dr * 0.1;
+      }
+      e.vx = vx; e.vy = vy;
+    } else { e.vx = 0; e.vy = 0; }
+    e.x = hx; e.y = hy; e.r = hr; e.facing = this.facing; e.ok = true;
+    if (chance(dt * 0.25)) this.earBase[chance(0.5) ? 0 : 1].v += rand(-2.5, 2.5); // twitch
+    if (p.shake > 0.1) for (let i = 0; i < 2; i++) this.earTip[i].v += Math.sin(p.time * 40 + i * 2) * 420 * p.shake * dt;
+    // tips may flare far outward but only swing a little toward the face (the head is in the way)
+    const lim = (sp: Spring, lo: number, hi: number) => {
+      sp.update(0, dt);
+      if (sp.x < lo) { sp.x = lo; sp.v = Math.max(0, sp.v); } else if (sp.x > hi) { sp.x = hi; sp.v = Math.min(0, sp.v); }
+      return sp.x;
+    };
+    p.earL = lim(this.earBase[0], -0.5, 0.5);
+    p.earR = lim(this.earBase[1], -0.5, 0.5);
+    p.earTipL = lim(this.earTip[0], -1.2, 0.35);
+    p.earTipR = lim(this.earTip[1], -0.35, 1.2);
   }
 
   private idleGazeTarget(): { x: number; y: number } | null {

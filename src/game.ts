@@ -189,14 +189,16 @@ export class Game {
         const follow = this.world.zoneOf(this.pet.x) === this.zone ? this.pet.x : this.camT.x;
         this.camT.x = clamp(follow, zb.x0 + halfW, zb.x1 - halfW);
       }
-      const halfH = this.H / 2 / this.base;
-      this.camT.y = 700 - halfH + 92 / this.base;
+      this.camT.y = this.freeCamY();
     }
     const r = this.settings.reducedMotion ? 10 : 4;
     this.cam.x = damp(this.cam.x, this.camT.x, r, dt);
     this.cam.y = damp(this.cam.y, this.camT.y, r, dt);
     this.cam.zoom = damp(this.cam.zoom, this.camT.zoom, r, dt);
   }
+
+  /** Camera height when not zoomed in: the floor sits in the lower part of the screen. */
+  freeCamY() { return 700 - this.H / 2 / this.base + 92 / this.base; }
 
   toWorld(sx: number, sy: number): [number, number] {
     const S = this.S;
@@ -217,6 +219,7 @@ export class Game {
     const x0 = this.cam.x - this.W / 2 / S, x1 = this.cam.x + this.W / 2 / S;
     this.world.ensureCache(clamp(this.base * d, 0.75, 1.5));
     this.world.drawBack(ctx, x0, x1);
+    this.mini.drawGround(ctx);
     // depth-sorted things
     const items: { y: number; draw: (c: CanvasRenderingContext2D) => void }[] = this.world.sortables();
     if (this.mode !== 'title' || this.ui.titleShowsPet) {

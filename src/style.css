@@ -161,7 +161,20 @@ button { font: inherit; color: inherit; }
 .mini-hud { position: absolute; top: calc(env(safe-area-inset-top) + 72px); left: 50%; transform: translateX(-50%); display: none; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; background: rgba(255,250,244,.94); padding: 10px 14px; border-radius: var(--r); box-shadow: var(--shadow); width: min(94vw, 480px); }
 .mini-hud.show { display: flex; }
 .mini-title { font-weight: 900; font-size: 1.1em; }
-.mini-tip { width: 100%; text-align: center; font-weight: 700; color: var(--ink-soft); font-size: .9em; }
+.mini-tip { width: 100%; text-align: center; font-weight: 800; color: var(--ink-soft); font-size: 1em; }
+.mini-tip.heat0 { color: #3f7fc2; }
+.mini-tip.heat1 { color: #d9771c; }
+.mini-tip.heat2 { color: #e0355f; }
+.mini-tip.heat3 { color: #b07a00; }
+.mini-tip.pop { animation: tipPop .4s cubic-bezier(.3,1.6,.5,1); }
+@keyframes tipPop { from { transform: scale(.8); } }
+/* during activities, toasts go to the bottom so they never cover the HUD or the play area's top */
+#ui.minigame .toasts { top: auto; bottom: calc(env(safe-area-inset-bottom) + 14px); }
+@media (max-height: 520px) {
+  .mini-hud { top: calc(env(safe-area-inset-top) + 58px); padding: 6px 12px; gap: 6px; }
+  .mini-title { display: none; }
+  .mini-tip { font-size: .9em; }
+}
 .mini-bar { flex: 1; height: 14px; border-radius: 99px; background: #f3e2ea; overflow: hidden; min-width: 120px; }
 .mini-fill { height: 100%; background: linear-gradient(90deg, var(--pink), var(--gold)); width: 100%; }
 .mini-score { display: flex; align-items: center; gap: 4px; font-weight: 900; font-size: 1.3em; }

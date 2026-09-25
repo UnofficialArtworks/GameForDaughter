@@ -2,7 +2,7 @@
 // +x = the direction it faces) from a set of continuous pose parameters.
 import { PALETTES, Palette } from '../data';
 import type { Appearance } from '../state';
-import { lerp, shade, ellipse, heartPath, starPath, clamp01 } from '../util';
+import { lerp, shade, ellipse, heartPath, starPath, clamp01, easeOutBack } from '../util';
 
 export interface Pose {
   crouch: number; sit: number; lie: number; belly: number; bow: number;
@@ -12,10 +12,12 @@ export interface Pose {
   walk: number; walkPhase: number; breath: number;
   eyeOpen: number; eyeHappy: number; eyeWide: number; pupil: number; lookX: number; lookY: number;
   brow: number; mouthOpen: number; smile: number; tongue: number; blush: number; cheekPuff: number;
-  earPerk: number; earSwingN: number; earSwingF: number;
+  // ear secondary motion (radians, left/right ear in pet-local space): base follows the head, tip lags
+  earPerk: number; earL: number; earR: number; earTipL: number; earTipR: number;
   tailWag: number; tailPhase: number; tailUp: number;
   paw: number; shake: number; kick: number; wet: number; dirt: number; foam: number; floof: number;
   special: number; // 0 none, 1 heart, 2 spiral, 3 star, 4 sleep-closed
+  eyePop: number; // 0→1 after the eye style changes (hearts/stars/closed): a quick springy pop instead of a snap
   sniff: number; time: number;
 }
 
@@ -26,10 +28,10 @@ export function defaultPose(): Pose {
     walk: 0, walkPhase: 0, breath: 0,
     eyeOpen: 1, eyeHappy: 0, eyeWide: 0, pupil: 1, lookX: 0, lookY: 0,
     brow: 0, mouthOpen: 0, smile: 0.4, tongue: 0, blush: 0.3, cheekPuff: 0,
-    earPerk: 0, earSwingN: 0, earSwingF: 0,
+    earPerk: 0, earL: 0, earR: 0, earTipL: 0, earTipR: 0,
     tailWag: 0.3, tailPhase: 0, tailUp: 0.5,
     paw: 0, shake: 0, kick: 0, wet: 0, dirt: 0, foam: 0, floof: 0,
-    special: 0, sniff: 0, time: 0,
+    special: 0, eyePop: 1, sniff: 0, time: 0,
   };
 }
 
@@ -437,7 +439,7 @@ function drawTail(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, pal: P
 }
 
 function drawEar(ctx: CanvasRenderingContext2D, type: string, main: string, inner: string, tip: string | null, line: string, R: number, sleepy: number) {
-  if (type === 'pointy') {
+  if (type !== 'long' && type !== 'round') { // pointy (also the fallback)
     const w = R * 0.62, h = R * 0.74;
     ctx.beginPath();
     ctx.moveTo(-w / 2, 4);
@@ -473,16 +475,92 @@ function drawEar(ctx: CanvasRenderingContext2D, type: string, main: string, inne
     fillStroke(ctx, tip ?? main, line);
     ellipse(ctx, 0, -r * 0.5, r * 0.55, r * 0.55, 0);
     ctx.fillStyle = inner; ctx.fill();
-  } else {
-    // floppy: hangs down from attach point
-    const w = R * 0.4, h = R * 0.95;
-    ctx.beginPath();
-    ctx.moveTo(-w * 0.4, -6);
-    ctx.bezierCurveTo(-w * 1.1, h * 0.25, -w * 0.7, h * 0.95, 0, h);
-    ctx.bezierCurveTo(w * 0.8, h * 0.95, w * 0.9, h * 0.2, w * 0.4, -6);
-    ctx.closePath();
-    fillStroke(ctx, tip ?? shade(main, -0.08), line);
   }
+}
+
+/** A floppy ear in head space: root on the skull → soft fold (joint) → rounded tip. */
+export interface FloppyEar { rx: number; ry: number; jx: number; jy: number; tx: number; ty: number; front: number; }
+
+/**
+ * Floppy (lop) ears. The roots sit on the top-sides of the skull; they are placed in 3D and turned
+ * with the head's yaw, so in the 3/4 view the ear on the far side slips behind the head and the
+ * near one stays on the viewer's side. The base segment lies over the skull and follows the head
+ * firmly; the hanging segment mostly obeys gravity and carries the lagging tip spring.
+ */
+export function floppyEars(p: Pose, R: number, hf: number, hrot: number): FloppyEar[] {
+  const yaw = (1 - hf) * 0.42;
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const perk = p.earPerk;
+  const out: FloppyEar[] = [];
+  for (const side of [-1, 1]) {
+    const base = side < 0 ? p.earL : p.earR, tip = side < 0 ? p.earTipL : p.earTipR;
+    // root on the skull (perked ears lift a little)
+    const a = 0.65 - Math.max(0, perk) * 0.05;
+    const X = side * Math.sin(a) * 0.84 * R, Y = -Math.cos(a) * 0.84 * R, Z = 0.075 * R;
+    const rx = X * cy + Z * sy, ry = Y - Math.max(0, perk) * R * 0.03;
+    const depth = -X * sy + Z * cy; // > 0: toward the viewer
+    // base segment runs outward over the skull (foreshortened by the yaw), then the flap hangs
+    const beta = 1.28 + perk * 0.18;
+    const b1 = Math.atan2(side * Math.sin(beta) * cy, Math.cos(beta)) + base - hrot * 0.15;
+    const L1 = R * 0.36 * Math.hypot(Math.sin(beta) * cy, Math.cos(beta));
+    const jx = rx + Math.sin(b1) * L1, jy = ry + Math.cos(b1) * L1;
+    const splay = Math.max(0.02, 0.12 + perk * 0.18);
+    const b2 = side * splay + base * 0.6 + tip - hrot * 0.75;
+    const L2 = R * 0.62;
+    out.push({ rx, ry, jx, jy, tx: jx + Math.sin(b2) * L2, ty: jy + Math.cos(b2) * L2, front: smooth01(depth / (0.02 * R) * 0.5 + 0.5) });
+  }
+  return out;
+}
+const smooth01 = (t: number) => { const x = clamp01(t); return x * x * (3 - 2 * x); };
+
+function drawFloppyEar(ctx: CanvasRenderingContext2D, e: FloppyEar, R: number, fill: string, line: string, tipCol: string | null) {
+  // spine = quadratic curve root → (joint) → tip, sampled; half-width swells toward the middle
+  const n = 8;
+  const L: [number, number][] = [], Rt: [number, number][] = [];
+  const hw = (t: number) => R * (0.14 + 0.12 * Math.sin(Math.min(1, t * 1.25) * Math.PI * 0.62));
+  let tipDir: [number, number] = [0, 1];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, u = 1 - t;
+    const x = u * u * e.rx + 2 * u * t * e.jx + t * t * e.tx, y = u * u * e.ry + 2 * u * t * e.jy + t * t * e.ty;
+    let dx = 2 * u * (e.jx - e.rx) + 2 * t * (e.tx - e.jx), dy = 2 * u * (e.jy - e.ry) + 2 * t * (e.ty - e.jy);
+    const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l;
+    if (i === n) tipDir = [dx, dy];
+    const w = hw(t);
+    L.push([x - dy * w, y + dx * w]);
+    Rt.push([x + dy * w, y - dx * w]);
+  }
+  const w0 = hw(0), wn = hw(1);
+  const [d0x, d0y] = [e.jx - e.rx, e.jy - e.ry];
+  const l0 = Math.hypot(d0x, d0y) || 1;
+  const path = new Path2D();
+  path.moveTo(L[0][0], L[0][1]);
+  for (let i = 1; i <= n; i++) path.quadraticCurveTo(L[i - 1][0], L[i - 1][1], (L[i - 1][0] + L[i][0]) / 2, (L[i - 1][1] + L[i][1]) / 2);
+  path.lineTo(L[n][0], L[n][1]);
+  // rounded tip
+  path.bezierCurveTo(L[n][0] + tipDir[0] * wn * 1.35, L[n][1] + tipDir[1] * wn * 1.35, Rt[n][0] + tipDir[0] * wn * 1.35, Rt[n][1] + tipDir[1] * wn * 1.35, Rt[n][0], Rt[n][1]);
+  for (let i = n - 1; i >= 0; i--) path.quadraticCurveTo(Rt[i + 1][0], Rt[i + 1][1], (Rt[i + 1][0] + Rt[i][0]) / 2, (Rt[i + 1][1] + Rt[i][1]) / 2);
+  path.lineTo(Rt[0][0], Rt[0][1]);
+  // rounded root cap, tucked onto the skull
+  path.quadraticCurveTo(e.rx - (d0x / l0) * w0 * 1.3, e.ry - (d0y / l0) * w0 * 1.3, L[0][0], L[0][1]);
+  path.closePath();
+  ctx.fillStyle = fill; ctx.fill(path);
+  if (tipCol) {
+    ctx.save(); ctx.clip(path);
+    ellipse(ctx, e.tx, e.ty, R * 0.34, R * 0.3, 0);
+    ctx.fillStyle = tipCol; ctx.fill();
+    ctx.restore();
+  }
+  ctx.strokeStyle = line; ctx.lineWidth = OUT; ctx.stroke(path);
+  // soft crease where the ear folds over the side of the head
+  const k = Math.round(n * 0.3);
+  ctx.save();
+  ctx.globalAlpha *= 0.35;
+  ctx.lineWidth = OUT * 0.7;
+  ctx.beginPath();
+  ctx.moveTo(L[k][0] * 0.8 + Rt[k][0] * 0.2, L[k][1] * 0.8 + Rt[k][1] * 0.2);
+  ctx.quadraticCurveTo(e.jx, e.jy + R * 0.05, Rt[k][0] * 0.8 + L[k][0] * 0.2, Rt[k][1] * 0.8 + L[k][1] * 0.2);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawHead(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, pal: Palette, main: string, line: string, dark: string,
@@ -490,41 +568,42 @@ function drawHead(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, pal: P
   const floppy = ap.ears === 'floppy';
   const earTip = ap.marking === 'tips' ? dark : null;
   const perk = p.earPerk;
-  // ear attach angles
-  let aN: number, aF: number;
-  if (floppy) { aN = lerp(-0.2, 1.15, hf); aF = -lerp(0.95, 1.15, hf); }
-  else if (ap.ears === 'round') { aN = lerp(0.55, 0.78, hf); aF = -lerp(0.55, 0.78, hf); }
-  else if (ap.ears === 'long') { aN = lerp(0.22, 0.32, hf); aF = -lerp(0.35, 0.32, hf); }
-  else { aN = lerp(0.42, 0.6, hf); aF = -lerp(0.52, 0.6, hf); }
   const faceX = lerp(R * 0.3, 0, hf);
-  const earPos = (a: number): [number, number] => [Math.sin(a) * R * 0.82 + faceX * 0.25, -Math.cos(a) * R * 0.82];
-  const sleepy = clamp01(1 - p.eyeOpen) * 0.3 + (perk < 0 ? -perk * 0.3 : 0);
-  const earRot = (a: number, swing: number, side: number) => {
-    if (floppy) return (side > 0 ? lerp(0.05, -0.28, hf) : lerp(-0.3, 0.28, hf)) + swing * 0.6 - side * perk * 0.25;
-    return a * 0.85 + swing * 0.35 - side * perk * -0.1 + side * (perk < 0 ? -perk * 0.7 : 0) - side * (perk > 0 ? perk * 0.12 : 0);
-  };
-  const [enx, eny] = earPos(aN), [efx, efy] = earPos(aF);
-  const inner = pal.inner;
-  const drawE = (x: number, y: number, r: number, side: number) => {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(r);
-    drawEar(ctx, ap.ears, main, inner, earTip, line, R, sleepy * side);
-    ctx.restore();
-  };
-  const rN = earRot(aN, p.earSwingN, 1), rF = earRot(aF, p.earSwingF, -1);
-  // record ear tips for hit tests (approx.)
-  const earLen = floppy ? R * 0.8 : R * 0.6;
-  const tipOf = (x: number, y: number, r: number): [number, number] => {
-    const dx = floppy ? -Math.sin(r) * earLen : Math.sin(r) * earLen;
-    const dy = floppy ? Math.cos(r) * earLen : -Math.cos(r) * earLen;
-    const [wx, wy] = rot(x + dx * 0.6, y + dy * 0.6, rig.hrot);
-    return [rig.hx + wx, rig.hy + wy];
-  };
-  rig.earN = tipOf(enx, eny, rN);
-  rig.earF = tipOf(efx, efy, rF);
-
-  if (!floppy) { drawE(efx, efy, rF, -1); drawE(enx, eny, rN, 1); } else if (hf < 0.5) drawE(efx, efy, rF, -1);
+  const toRig = (x: number, y: number): [number, number] => { const [wx, wy] = rot(x, y, rig.hrot); return [rig.hx + wx, rig.hy + wy]; };
+  // Layering, back to front: ears turned away from us → head → face features → neck/face wear →
+  // floppy ears on our side (they hang over the face, so they must cover what they overlap) → hats.
+  let flops: FloppyEar[] = [];
+  const earCol = shade(main, -0.06);
+  if (floppy) {
+    flops = floppyEars(p, R, hf, rig.hrot);
+    // hit points: middle of each flap (the near one first)
+    const mid = (e: FloppyEar) => toRig((e.jx + e.tx) / 2, (e.jy + e.ty) / 2);
+    const [a, b] = flops[0].front >= flops[1].front ? [flops[0], flops[1]] : [flops[1], flops[0]];
+    rig.earN = mid(a); rig.earF = mid(b);
+    for (const e of flops) if (e.front < 1) drawFloppyEar(ctx, e, R, shade(earCol, -0.1), line, earTip && shade(earTip, -0.1));
+  } else {
+    // upright ears stand behind the skull, so the head outline hides their base
+    let aN: number, aF: number;
+    if (ap.ears === 'round') { aN = lerp(0.55, 0.78, hf); aF = -lerp(0.55, 0.78, hf); }
+    else if (ap.ears === 'long') { aN = lerp(0.22, 0.32, hf); aF = -lerp(0.35, 0.32, hf); }
+    else { aN = lerp(0.42, 0.6, hf); aF = -lerp(0.52, 0.6, hf); }
+    const earPos = (a: number): [number, number] => [Math.sin(a) * R * 0.82 + faceX * 0.25, -Math.cos(a) * R * 0.82];
+    const sleepy = clamp01(1 - p.eyeOpen) * 0.3 + (perk < 0 ? -perk * 0.3 : 0);
+    const earRot = (a: number, swing: number, tip: number, side: number) =>
+      a * 0.85 + swing + tip * 0.3 + side * perk * 0.1 + side * (perk < 0 ? -perk * 0.7 : 0) - side * (perk > 0 ? perk * 0.12 : 0);
+    const [enx, eny] = earPos(aN), [efx, efy] = earPos(aF);
+    const rN = earRot(aN, p.earR, p.earTipR, 1), rF = earRot(aF, p.earL, p.earTipL, -1);
+    const len = R * 0.36;
+    rig.earN = toRig(enx + Math.sin(rN) * len, eny - Math.cos(rN) * len);
+    rig.earF = toRig(efx + Math.sin(rF) * len, efy - Math.cos(rF) * len);
+    for (const [x, y, r, side] of [[efx, efy, rF, -1], [enx, eny, rN, 1]]) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(r);
+      drawEar(ctx, ap.ears, main, pal.inner, earTip, line, R, sleepy * side);
+      ctx.restore();
+    }
+  }
 
   // head shape
   const headFluff = fluffAmp * 0.8;
@@ -563,8 +642,6 @@ function drawHead(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, pal: P
   const mzx = faceX + lerp(R * 0.06, 0, hf), mzy = R * 0.4;
   ellipse(ctx, mzx, mzy, R * 0.4, R * 0.27, 0);
   ctx.fillStyle = pal.belly; ctx.fill();
-
-  if (floppy) { if (hf >= 0.5) drawE(efx, efy, rF, -1); drawE(enx, eny, rN, 1); }
 
   // blush
   if (p.blush > 0.02) {
@@ -652,14 +729,24 @@ function drawHead(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, pal: P
     ctx.lineWidth = 1.8; ctx.stroke();
   }
 
-  drawWear(ctx, wear, R, faceX, nearX, farX, eyeY, er, farS, hf, pal);
+  drawWear(ctx, wear, R, faceX, nearX, farX, eyeY, er, farS, hf, pal, 'body');
+  // floppy ears on the viewer's side lie over the face: drawn after the eyes so they cover them
+  for (const e of flops) {
+    if (e.front <= 0) continue;
+    ctx.save();
+    ctx.globalAlpha = e.front;
+    drawFloppyEar(ctx, e, R, earCol, line, earTip);
+    ctx.restore();
+  }
+  drawWear(ctx, wear, R, faceX, nearX, farX, eyeY, er, farS, hf, pal, 'head');
 }
 
 function drawEye(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, pal: Palette, x: number, y: number, er: number, sx: number,
   lx: number, ly: number, skin: string, line: string, side: number) {
   ctx.save();
   ctx.translate(x, y);
-  ctx.scale(sx, 1);
+  const pop = p.eyePop < 1 ? 0.55 + 0.45 * easeOutBack(clamp01(p.eyePop)) : 1;
+  ctx.scale(sx * pop, pop);
   const sp = p.special;
   if (sp === 1) { // hearts
     const s = er * 1.05 * (1 + Math.sin(p.time * 10) * 0.08);
@@ -693,7 +780,7 @@ function drawEye(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, pal: Pa
   };
   if (sp === 4) { closedLine(false); ctx.restore(); return; }
   if (p.eyeHappy > 0.5) { closedLine(true); ctx.restore(); return; }
-  const open = clamp01(p.eyeOpen);
+  const open = clamp01(Math.min(p.eyeOpen, 1 - p.eyeHappy * 1.7));
   if (open < 0.12) { closedLine(false); ctx.restore(); return; }
 
   const pupil = p.pupil;
@@ -750,10 +837,11 @@ function drawEye(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, pal: Pa
   ctx.restore();
 }
 
-function drawWear(ctx: CanvasRenderingContext2D, wear: Wear, R: number, faceX: number, nearX: number, farX: number, eyeY: number, er: number, farS: number, hf: number, pal: Palette) {
+/** 'body' = neck + face accessories (under floppy ears), 'head' = hats (over the ear roots). */
+function drawWear(ctx: CanvasRenderingContext2D, wear: Wear, R: number, faceX: number, nearX: number, farX: number, eyeY: number, er: number, farS: number, hf: number, pal: Palette, part: 'body' | 'head') {
   const out = '#3a2a2a';
   ctx.lineWidth = 2.5;
-  if (wear.neck) {
+  if (part === 'body' && wear.neck) {
     const y = R * 0.86;
     if (wear.neck === 'bandana') {
       ctx.beginPath();
@@ -783,7 +871,7 @@ function drawWear(ctx: CanvasRenderingContext2D, wear: Wear, R: number, faceX: n
       ctx.beginPath(); ctx.rect(-R * 0.35, y, 12, R * 0.45); ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = out; ctx.stroke();
     }
   }
-  if (wear.face) {
+  if (part === 'body' && wear.face) {
     ctx.lineWidth = 3;
     if (wear.face === 'glasses') {
       ctx.strokeStyle = '#5b4636';
@@ -803,7 +891,7 @@ function drawWear(ctx: CanvasRenderingContext2D, wear: Wear, R: number, faceX: n
       ctx.beginPath(); ctx.moveTo(farX + er * farS, eyeY - 4); ctx.lineTo(nearX - er, eyeY - 4); ctx.stroke();
     }
   }
-  if (wear.head) {
+  if (part === 'head' && wear.head) {
     const tx = faceX * 0.25, ty = -R * 0.86;
     ctx.save();
     ctx.translate(tx, ty);

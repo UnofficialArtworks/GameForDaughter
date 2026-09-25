@@ -188,7 +188,9 @@ export class World {
         ctx.fillStyle = 'rgba(255,255,255,0.4)';
         ellipse(ctx, px - 20 * this.puddle, py - 5 * this.puddle, 30 * this.puddle, 5 * this.puddle); ctx.fill();
       }
-      for (const d of this.digs) this.drawDig(ctx, d);
+      // during Treasure Sniff the usual sparkly mounds would only be decoys
+      const sniffing = this.g.mini.id === 'sniff';
+      for (const d of this.digs) if (!(sniffing && d.ready)) this.drawDig(ctx, d);
       for (const l of this.leaves) if (l.vy === 0) this.drawLeaf(ctx, l);
     }
   }

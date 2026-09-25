@@ -20,7 +20,7 @@ npm run build
 npm run preview    # serve the built files locally
 ```
 
-Tests (save/load, memory & preference logic, needs):
+Tests (save/load, memory & preference logic, needs, floppy-ear anchoring and layering):
 
 ```bash
 npm test
@@ -39,6 +39,7 @@ Tip for testing day and night: add `?hour=13` or `?hour=22` to the URL.
 | Tap the **bowls** | Fill the food bowl / refresh the water. Tap the doorway to go to the garden. |
 | **Play** menu | Ball, Squeaky Donut, Feather Wand, Bubble Wand, Bubble Party, Treasure Sniff |
 | Flick the ball | Throw it. Tapping anywhere also throws it there, and the **Throw!** button works too. |
+| **Treasure Sniff** (garden) | Tap the grass to send your pet sniffing. The closer it gets, the more excited it is (shrug → wag → bouncing and pawing). Follow its nose, tap the wiggly spot, and it digs up a treasure. |
 
 Every drag interaction has a button alternative: spot buttons for petting, a **Give it!** button for
 feeding, **Brush / Scrub / Rinse / Dry** buttons, and **Throw! / Wiggle! / Blow!** for toys. Menus work with the
@@ -85,13 +86,14 @@ src/
   interact.ts        pointer input: stroke detection, taps, carrying
   closeup.ts         close-up stage: cuddle, hand-feeding, brush, bath, trick training
   toys.ts            ball / squeaky / wand / bubbles and the pet's play logic
-  minigames.ts       Bubble Party, Treasure Sniff
+  minigames.ts       Bubble Party, Treasure Sniff (the pet's hot/cold reactions are the clue)
   world/world.ts     room + garden art (cached), weather, butterflies, dig spots, points of interest
   art.ts             procedural icons (used on canvas and in the DOM)
   audio.ts           WebAudio synth: pet voice, foley, UI sounds, generative music
   fx.ts              pooled particles
   ui.ts, style.css   DOM UI: title/adoption, HUD, trays, memory book, shop, settings
 tests/core.test.ts   save/load, needs, memory/preference tests
+tests/ears.test.ts   floppy ears stay rooted on the skull and layer correctly in every view
 ```
 
 All art and sound is generated in code. There are no image or audio assets.
