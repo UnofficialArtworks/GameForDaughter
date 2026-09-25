@@ -95,6 +95,24 @@ export const COLLECTIBLES: CollectDef[] = [
   { id: 'rainbow', name: 'Rainbow Scale', weight: 1, color: '#ff9ad5', shape: 'rainbow' },
 ];
 
+/**
+ * Walk keepsakes: little things found on Walkies. They live in the same collection store as garden
+ * treasures (memory.collect) but are only ever found on walks. weight 0 = never random (special find).
+ */
+export const KEEPSAKES: CollectDef[] = [
+  { id: 'mapleleaf', name: 'Pretty Maple Leaf', weight: 10, color: '#f08a3c', shape: 'maple' },
+  { id: 'smoothstone', name: 'Smooth Stone', weight: 10, color: '#a9b3bf', shape: 'flatstone' },
+  { id: 'petal', name: 'Flower Petal', weight: 9, color: '#ff9ec4', shape: 'petal' },
+  { id: 'speckfeather', name: 'Speckled Feather', weight: 7, color: '#d9b88a', shape: 'feather' },
+  { id: 'dandelion', name: 'Dandelion Puff', weight: 7, color: '#ffffff', shape: 'puff' },
+  { id: 'twig', name: 'Funny Twig', weight: 6, color: '#9a6a45', shape: 'twig' },
+  { id: 'heartleaf', name: 'Heart-Shaped Leaf', weight: 1.5, color: '#6cc25a', shape: 'heartleaf' },
+  { id: 'goldfeather', name: 'Golden Feather', weight: 1, color: '#ffd23f', shape: 'feather' },
+  { id: 'bigstick', name: 'The Biggest Stick', weight: 0, color: '#8a5a33', shape: 'bigstick' },
+];
+/** Any collectible, garden treasure or walk keepsake. */
+export const collectDef = (id: string) => COLLECTIBLES.find((c) => c.id === id) ?? KEEPSAKES.find((c) => c.id === id);
+
 export type TrickId = 'sit' | 'spin' | 'highfive' | 'rollover';
 export interface TrickDef { id: TrickId; name: string; level: number; }
 export const TRICKS: TrickDef[] = [

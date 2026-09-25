@@ -514,7 +514,8 @@ function* anticipateTray(b: Brain, kind: string): Gen {
     }
     pet.expr = eager ? 'excited' : 'happy'; pet.o.tailWag = eager ? 1.5 : 0.8;
     if (eager) { pet.body = 'bow'; g.audio.voice('excited'); }
-    if (fav && g.save.inventory.toys.includes(fav)) pet.think(fav, 2.5); // "the good one, please!"
+    if (b.habit('walkies') > 0.4 && g.walk.canStart() && chance(0.4)) pet.think('walk', 2.5); // "…walkies?"
+    else if (fav && g.save.inventory.toys.includes(fav)) pet.think(fav, 2.5); // "the good one, please!"
     yield* wait(pet, 2.5);
     pet.body = 'stand';
   } else if (kind === 'care') {
@@ -637,7 +638,7 @@ function makeBehaviors(b: Brain): Behavior[] {
   const bounds = () => g.world.zoneBounds(g.zone);
   const front = () => g.frontPoint();
   // (a fresh greeting counts as social time too, so it doesn't pester right after saying hello)
-  const played = (s: number) => st.within('fetch', s) || st.within('toy', s) || st.within('played', s) || st.within('greeted', Math.min(s, 45));
+  const played = (s: number) => st.within('fetch', s) || st.within('toy', s) || st.within('played', s) || st.within('greeted', Math.min(s, 45)) || st.within('walked', Math.min(s, 90));
   const L: Behavior[] = [
     {
       id: 'wander', cd: 3, w: (b) => 0.7 + b.tr.energy * 0.3,
@@ -710,7 +711,7 @@ function makeBehaviors(b: Brain): Behavior[] {
     },
     {
       // after romping outside, a pet is thirsty
-      id: 'drink', zone: 'room', cd: 70, w: (b) => 0.3 + (st.within('fromGarden', 90) ? 1.2 : 0) + (st.count('fetch', 180) >= 3 ? 0.5 : 0) + (b.n.energy < 0.4 ? 0 : 0.05),
+      id: 'drink', zone: 'room', cd: 70, w: (b) => 0.3 + (st.within('fromGarden', 90) || st.within('walked', 120) ? 1.2 : 0) + (st.count('fetch', 180) >= 3 ? 0.5 : 0) + (b.n.energy < 0.4 ? 0 : 0.05),
       run: function* () {
         const pet = P();
         const [x, y] = g.world.poi('water');
@@ -927,7 +928,7 @@ function makeBehaviors(b: Brain): Behavior[] {
     },
     {
       // RELAXED: a long, content lounge — close to you if you're good friends
-      id: 'lounge', cd: 45, w: (b) => (1 - b.tr.energy) * 0.45 + (st.within('fed', 150) ? 0.3 : 0) + (b.fl >= 3 ? b.tr.cuddly * 0.3 : 0) + (b.n.energy < 0.5 ? 0.15 : 0),
+      id: 'lounge', cd: 45, w: (b) => (1 - b.tr.energy) * 0.45 + (st.within('fed', 150) || st.within('walked', 150) ? 0.3 : 0) + (b.fl >= 3 ? b.tr.cuddly * 0.3 : 0) + (b.n.energy < 0.5 ? 0.15 : 0),
       run: function* () {
         const pet = P();
         let [x, y] = g.zone === 'room' ? g.world.poi(pick(['rug', 'rug', 'bed'])) : g.world.poi('sunny');
@@ -1073,6 +1074,20 @@ function makeBehaviors(b: Brain): Behavior[] {
         pet.body = 'sit'; pet.lookCam = 1; pet.expr = 'hungry'; g.audio.voice('question');
         const ok = yield* askFor(b, 'outside', 6);
         if (!ok) { pet.body = 'lie'; pet.lookAt = { x: 985, y: 330 }; yield* wait(pet, rand(2, 4)); }
+      },
+    },
+    {
+      // WALKIES habit: a pet that loves walks goes and sits by the garden gate now and then
+      id: 'gateWait', zone: 'garden', cd: 200, w: (b) => (b.fl >= 1 && b.habit('walkies') > 0.25 && !st.within('walked', 300) && !b.snubbed('walk', 300) ? b.habit('walkies') * 0.7 : 0),
+      run: function* () {
+        const pet = P();
+        yield* approach(pet, 1935, 525, 170, { x: 1985, y: 380 });
+        pet.face(1); pet.body = 'sit'; pet.lookAt = { x: 1985, y: 380 }; pet.o.earPerk = 1; pet.o.tailWag = 1.2;
+        yield* wait(pet, 1.2);
+        pet.lookAt = null; pet.lookCam = 1; yield* wait(pet, 0.7); // a look back at you…
+        pet.lookCam = 0; pet.lookAt = { x: 1985, y: 380 }; pet.o.paw = 0.7; yield* wait(pet, 0.3); pet.o.paw = 0; yield* wait(pet, 0.4);
+        pet.lookAt = null; pet.lookCam = 1; g.audio.voice('question');
+        yield* askFor(b, 'walk', 6, (t) => { pet.o.tailWag = 0.8 + Math.sin(t * 3) * 0.4; });
       },
     },
     {

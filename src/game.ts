@@ -10,13 +10,14 @@ import { Toys } from './toys';
 import { Interaction } from './interact';
 import { CloseUp } from './closeup';
 import { MiniGames } from './minigames';
+import { Walk } from './walk';
 import { UI } from './ui';
 import { SaveData, writeSave, friendshipLevel, dayKey, applyOffline, TraitId } from './state';
-import { COLLECTIBLES, FRIEND_LEVELS, FRIEND_UNLOCKS, foodDef, toyDef, SPOT_NAMES, PetSpot, TRICKS } from './data';
+import { COLLECTIBLES, KEEPSAKES, collectDef, FRIEND_LEVELS, FRIEND_UNLOCKS, foodDef, toyDef, SPOT_NAMES, PetSpot, TRICKS } from './data';
 import { addJournal, bump, playToy, addRecent } from './memory';
 import { clamp, damp, rand, chance } from './util';
 
-export type Mode = 'title' | 'adopt' | 'free' | 'closeup' | 'minigame';
+export type Mode = 'title' | 'adopt' | 'free' | 'closeup' | 'minigame' | 'walk';
 
 const TRAIT_TEXT: Record<TraitId, [string, string, string]> = {
   energy: ['A champion napper who loves slow, cozy days.', 'Likes a good mix of play and naps.', 'A bouncy bundle of energy. Zoomies are life!'],
@@ -44,6 +45,7 @@ export class Game {
   input!: Interaction;
   closeup!: CloseUp;
   mini!: MiniGames;
+  walk!: Walk;
   ui!: UI;
   zone: Zone = 'room';
   mode: Mode = 'title';
@@ -72,6 +74,7 @@ export class Game {
     this.input = new Interaction(this);
     this.closeup = new CloseUp(this);
     this.mini = new MiniGames(this);
+    this.walk = new Walk(this);
     this.ui = new UI(this);
     this.applySettings();
     this.resize();
@@ -91,6 +94,7 @@ export class Game {
     this.pet = new Pet(this);
     this.brain = new Brain(this);
     this.toys.clear();
+    this.walk = new Walk(this);
     this.world.cacheKey = '';
     this.pet.x = 480; this.pet.y = 580;
     this.cam.x = this.camT.x = 500;
@@ -146,13 +150,14 @@ export class Game {
       this.input.update(dt);
       this.closeup.update(dt);
       this.mini.update(dt);
+      this.walk.update(dt);
     } else {
       this.pet.update(dt);
     }
     this.fx.update(dt);
     for (const k in this.recentGain) this.recentGain[k] *= Math.exp(-dt / 90);
     this.updateCamera(dt);
-    if (this.mode === 'free' || this.mode === 'closeup' || this.mode === 'minigame') {
+    if (this.mode === 'free' || this.mode === 'closeup' || this.mode === 'minigame' || this.mode === 'walk') {
       this.save.playTime += dt;
       this.saveT += dt;
       if (this.saveT > 8) { this.saveT = 0; this.persist(); }
@@ -181,6 +186,10 @@ export class Game {
       const cx = a.x + a.w / 2, cy = a.y + a.h / 2;
       this.camT.x = this.pet.x - (cx - this.W / 2) / Sz;
       this.camT.y = this.pet.y - 100 * this.pet.depth - (cy - this.H / 2) / Sz;
+    } else if (this.mode === 'walk') {
+      this.camT.zoom = 1;
+      this.camT.x = this.walk.camX();
+      this.camT.y = this.freeCamY();
     } else {
       this.camT.zoom = 1;
       const zb = this.zone === 'room' ? ROOM : GARDEN;
@@ -218,11 +227,19 @@ export class Game {
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     ctx.setTransform(d * S, 0, 0, d * S, d * (this.W / 2 - this.cam.x * S), d * (this.H / 2 - this.cam.y * S));
     const x0 = this.cam.x - this.W / 2 / S, x1 = this.cam.x + this.W / 2 / S;
-    this.world.ensureCache(clamp(this.base * d, 0.75, 1.5));
-    this.world.drawBack(ctx, x0, x1);
-    this.mini.drawGround(ctx);
+    const walking = this.mode === 'walk';
+    let items: { y: number; draw: (c: CanvasRenderingContext2D) => void }[];
+    if (walking) {
+      this.walk.drawBack(ctx, x0, x1);
+      items = [];
+      this.walk.sortables(items);
+    } else {
+      this.world.ensureCache(clamp(this.base * d, 0.75, 1.5));
+      this.world.drawBack(ctx, x0, x1);
+      this.mini.drawGround(ctx);
+      items = this.world.sortables();
+    }
     // depth-sorted things
-    const items: { y: number; draw: (c: CanvasRenderingContext2D) => void }[] = this.world.sortables();
     if (this.mode !== 'title' || this.ui.titleShowsPet) {
       items.push({ y: this.pet.y, draw: (c) => { this.closeup.drawBehindPet(c); this.pet.draw(c); this.closeup.drawOverPet(c); } });
     }
@@ -232,13 +249,14 @@ export class Game {
     items.sort((a, b) => a.y - b.y);
     for (const it of items) it.draw(ctx);
     this.toys.draw(ctx);
-    this.world.drawFront(ctx, x0, x1);
+    if (walking) this.walk.drawFront(ctx, x0, x1); else this.world.drawFront(ctx, x0, x1);
     this.fx.draw(ctx);
     if (this.mode !== 'title') this.pet.drawBubbles(ctx);
-    this.world.drawTint(ctx, x0, x1);
+    if (walking) this.walk.drawTint(ctx, x0, x1); else this.world.drawTint(ctx, x0, x1);
     this.closeup.drawTop(ctx);
     this.input.draw(ctx);
     this.mini.draw(ctx);
+    this.walk.drawFade(ctx);
   }
 
   // ---------- zone switching ----------
@@ -391,11 +409,12 @@ export class Game {
     m.collect[id] = (m.collect[id] ?? 0) + 1;
     this.fx.icon(x, y - 30, 'c:' + id);
     this.fx.sparkles(x, y - 30, 6);
-    const c = COLLECTIBLES.find((q) => q.id === id)!;
-    this.bump('treasures');
-    if (first) this.discover('c:' + id, `Found a treasure: ${c.name}!`, 5);
+    const c = collectDef(id)!;
+    const keep = KEEPSAKES.includes(c);
+    this.bump(keep ? 'keepsakes' : 'treasures');
+    if (first) this.discover('c:' + id, keep ? `New keepsake: ${c.name}!` : `Found a treasure: ${c.name}!`, keep && c.weight < 2 ? 10 : 5);
     else { this.toast('c', `Found another ${c.name}!`, 'c:' + id); this.earn(2); }
-    const kinds = Object.keys(m.collect).length;
+    const kinds = COLLECTIBLES.filter((q) => m.collect[q.id]).length;
     if (kinds >= 5) this.achieve('treasure5', 'Treasure Hunter');
     if (kinds >= COLLECTIBLES.length) this.achieve('treasureAll', 'Master Collector');
   }

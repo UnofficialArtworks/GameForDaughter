@@ -140,6 +140,13 @@ export class AudioManager {
   step() { if (!this.ok()) return; const t = performance.now(); if (t - this.lastStep < 180) return; this.lastStep = t; this.tone(rand(140, 180), 0.04, 'sine', 0.05, 90); }
   whoosh() { if (!this.ok()) return; this.noiseBurst(0.25, 1200, 0.7, 0.18); }
   shake() { if (!this.ok()) return; for (let i = 0; i < 6; i++) this.noiseBurst(0.06, 2500, 1, 0.2, i * 0.06); }
+  // ---------- outdoors (Walkies) ----------
+  chirp() { if (!this.ok()) return; const f = rand(2400, 3400); for (let i = 0; i < 2 + Math.floor(rand(0, 3)); i++) this.tone(f * rand(0.9, 1.1), 0.08, 'sine', 0.05, f * 1.35, i * 0.13); }
+  cricket() { if (!this.ok()) return; for (let i = 0; i < 4; i++) this.tone(4200, 0.03, 'triangle', 0.025, 4000, i * 0.07); }
+  breeze() { if (!this.ok()) return; this.noiseBurst(1.4, 500, 0.4, 0.06, 0, 'lowpass'); }
+  rustle() { if (!this.ok()) return; for (let i = 0; i < 4; i++) this.noiseBurst(0.09, rand(2500, 4500), 1.2, 0.14, i * 0.07); }
+  plop() { if (!this.ok()) return; this.tone(500, 0.12, 'sine', 0.18, 180); this.noiseBurst(0.1, 2000, 1, 0.08); }
+  hoot() { if (!this.ok()) return; this.tone(420, 0.35, 'sine', 0.12, 380); this.tone(420, 0.5, 'sine', 0.12, 360, 0.5); }
   highfive() { if (!this.ok()) return; this.noiseBurst(0.08, 2000, 0.8, 0.5); this.chime(); }
   // ---------- UI ----------
   click() { if (!this.ok()) return; this.tone(880, 0.05, 'sine', 0.15, 1100); }

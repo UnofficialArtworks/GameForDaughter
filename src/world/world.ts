@@ -39,7 +39,7 @@ export class World {
 
   depthScale(y: number) { return 0.8 + clamp((y - FLOOR_TOP) / (FLOOR_BOT - FLOOR_TOP), 0, 1) * 0.3; }
   zoneOf(x: number): Zone { return x < ROOM.x1 ? 'room' : 'garden'; }
-  walkBounds() { return { x0: 50, x1: 2050, y0: FLOOR_TOP + 22, y1: FLOOR_BOT - 18 }; }
+  walkBounds() { return this.g.walk?.active && this.g.pet.x > 2500 ? this.g.walk.bounds() : { x0: 50, x1: 2050, y0: FLOOR_TOP + 22, y1: FLOOR_BOT - 18 }; }
   zoneBounds(z: Zone) { return z === 'room' ? { x0: 70, x1: 930, y0: FLOOR_TOP + 25, y1: FLOOR_BOT - 20 } : { x0: 1080, x1: 2040, y0: FLOOR_TOP + 25, y1: FLOOR_BOT - 20 }; }
   randomPoint(z: Zone): [number, number] { const b = this.zoneBounds(z); return [rand(b.x0, b.x1), rand(b.y0, b.y1)]; }
 
@@ -477,8 +477,25 @@ export class World {
     // stepping stones from the door
     ctx.fillStyle = night ? '#8a8a9a' : '#d8d4cc';
     for (const [x, y] of [[1050, 560], [1120, 590], [1200, 610]]) { ellipse(ctx, x, y, 28, 11); ctx.fill(); }
+    // the gate out to the park (Walkies)
+    this.paintGate(ctx);
     // garden decoration slot
     this.paintGardenDecor(ctx, this.g.save.equipped.decor.garden);
+  }
+
+  private paintGate(ctx: CanvasRenderingContext2D) {
+    const x = 1985, night = this.isNight();
+    ctx.fillStyle = night ? '#6a5040' : '#b98a5e'; ctx.strokeStyle = '#7a5530'; ctx.lineWidth = 3;
+    ctx.fillRect(x - 46, 330, 12, 125); ctx.strokeRect(x - 46, 330, 12, 125);
+    ctx.fillRect(x + 34, 330, 12, 125); ctx.strokeRect(x + 34, 330, 12, 125);
+    ctx.beginPath(); ctx.moveTo(x - 40, 334); ctx.quadraticCurveTo(x, 296, x + 40, 334); ctx.lineWidth = 7; ctx.stroke();
+    ctx.fillStyle = night ? '#8a6a52' : '#d9a878'; ctx.lineWidth = 2.5;
+    for (let i = 0; i < 5; i++) { const bx = x - 32 + i * 14; ctx.fillRect(bx, 356, 10, 94); ctx.strokeRect(bx, 356, 10, 94); }
+    ctx.fillRect(x - 34, 372, 68, 9); ctx.strokeRect(x - 34, 372, 68, 9); ctx.fillRect(x - 34, 420, 68, 9); ctx.strokeRect(x - 34, 420, 68, 9);
+    // little sign: paw prints = walkies
+    ctx.fillStyle = '#fff4e2'; ctx.fillRect(x - 24, 300, 48, 26); ctx.strokeRect(x - 24, 300, 48, 26);
+    ctx.fillStyle = '#ff8ab5';
+    for (const [dx, dy] of [[-12, 318], [0, 310], [12, 318]]) { ellipse(ctx, x + dx, dy, 3.5, 3); ctx.fill(); }
   }
 
   private paintGardenDecor(ctx: CanvasRenderingContext2D, id: string) {

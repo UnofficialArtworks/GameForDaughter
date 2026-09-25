@@ -1,6 +1,7 @@
 // Persistent data model + pure simulation helpers (no rendering here).
 import { FOODS, TOYS, PET_SPOTS, TRICKS, FoodId, ToyId, PetSpot, DecorSlot, BODY_TYPES, EAR_TYPES, TAIL_TYPES, EYE_TYPES, MARKINGS, PALETTES } from './data';
 import { clamp01, seeded } from './util';
+import { emptyWalkMem, type WalkMem } from './walkmem';
 
 export interface Traits { energy: number; brave: number; cuddly: number; appetite: number; playful: number; curious: number; }
 export type TraitId = keyof Traits;
@@ -31,6 +32,8 @@ export interface MemoryData {
   counters: Record<string, number>;
   /** Slow-moving behavioural tendencies (see pet/context.ts). Missing in older saves → {}. */
   habits: Record<string, number>;
+  /** Walkies memory (see walkmem.ts). Missing in older saves → defaults. */
+  walk: WalkMem;
 }
 export interface Settings { music: number; sfx: number; reducedMotion: boolean; highContrast: boolean; largeText: boolean; }
 export interface SaveData {
@@ -105,7 +108,7 @@ export function makeHidden(seed: number, traits: Traits): Hidden {
 export function emptyMemory(): MemoryData {
   const tricks: MemoryData['tricks'] = {};
   for (const t of TRICKS) tricks[t.id] = { prof: 0, learned: false, performed: 0 };
-  return { foods: {}, toys: {}, spots: {}, tricks, traitsRevealed: [], collect: {}, journal: [], recent: [], counters: {}, habits: {} };
+  return { foods: {}, toys: {}, spots: {}, tricks, traitsRevealed: [], collect: {}, journal: [], recent: [], counters: {}, habits: {}, walk: emptyWalkMem() };
 }
 
 export function dayKey(t: number) {

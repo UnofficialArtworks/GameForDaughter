@@ -62,6 +62,14 @@ keyboard (Tab / Enter / Esc).
   repetition, fade gently over days, and are announced in the journal when they appear. Requests are paced, expire
   on their own and never cost anything when ignored. Friendship changes behaviour (eye contact, closeness, greetings,
   bringing toys, napping near you); greetings differ by personality and time away.
+- **Walkies**: once you're Pals, take your pet out through the garden gate (or Play → Walkies) for a 3–5 minute
+  stroll through one hand-drawn park path. There are 5–6 stops and one fork where you pick a path (Flower Path, Pond Path,
+  Shady Woods, Sunny Meadow), and your pet leans toward the one it likes. At each stop the pet notices something first
+  and reacts in its own way: flowers, puddles, leaf piles, butterflies (fireflies at night), bushes, the bench, a
+  mystery sound, a digging spot, a stick, a picnic. A cautious pet tests the puddle with a paw; an energetic one
+  cannonballs in; a picky one tiptoes round. Tap things to point them out; pet them when you pause. Walks collect
+  a little story for the Memory Book, occasional keepsakes (their own page in Treasures), muddy paws, and maybe a
+  stick. Favourite walk spots and a "walkies" habit (waiting by the gate) emerge over many walks.
 - **Personality**: six continuous traits, rolled randomly for each pet. They affect speed, sleepiness, bravery around new
   things, how it returns the ball (or plays keep-away), cuddliness, pickiness, and how fast it learns tricks. The
   memory book reveals them gradually.
@@ -93,6 +101,8 @@ src/
   pet/Pet.ts         pet entity: movement, pose/expression blending, gaze, blinking, springs, hit zones
   pet/brain.ts       moods, utility AI, behaviour chains (generators), anticipation, greetings, tricks
   pet/context.ts     short-term memory, habits, request pacing (pure logic)
+  walk.ts            Walkies: park scene, walk flow, stop events, homecoming
+  walkmem.ts         walk memory: route planning, favourite walk spot (pure logic)
   interact.ts        pointer input: stroke detection, taps, carrying
   closeup.ts         close-up stage: cuddle, hand-feeding, brush, bath, trick training
   toys.ts            ball / squeaky / wand / bubbles and the pet's play logic

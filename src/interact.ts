@@ -37,6 +37,7 @@ export class Interaction {
     try { g.canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     if (g.mode === 'adopt') { g.ui.adoptTap(wx, wy); return; }
     if (g.mode === 'minigame' && g.mini.onDown(wx, wy)) return;
+    if (g.mode === 'walk' && g.walk.onDown(wx, wy)) return;
     if (g.mode === 'closeup' && g.closeup.onDown(wx, wy, e.pointerId)) return;
     const zone = g.pet.hitZone(wx, wy, g.mode === 'closeup' ? 1.05 : 1.15);
     if (zone && g.toys.active && g.toys.thr?.carried) { g.toys.petTaps++; return; }
@@ -276,6 +277,7 @@ export class Interaction {
       if (near('basket', 70)) { g.ui.openTray('play'); return; }
       if (wy < 430) { g.pet.lookAt = { x: wx, y: wy }; g.pet.emote('?', 1); g.brain.noteInteraction(0.02); return; }
     } else {
+      if (Math.abs(wx - 1985) < 60 && wy > 290 && wy < 470) { g.walk.canStart() ? g.walk.start() : g.toast('walk', 'Become Pals first!', 'walk'); return; }
       if (wx < 1030 && wy < 460) { g.goZone('room'); return; }
     }
     if (wy >= 430) g.callPet(wx, wy);

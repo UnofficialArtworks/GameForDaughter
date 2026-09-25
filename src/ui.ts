@@ -2,6 +2,9 @@
 import type { Game } from './game';
 import { iconURL } from './art';
 import { newSave, randomAppearance, loadSave, clearSave, writeSave, Appearance, TraitId, SaveData } from './state';
+import { PATHS, SPOT_TEXT, type WalkKind } from './walkmem';
+import { KEEPSAKES, collectDef } from './data';
+const PATHS_ICON: Record<string, string> = { flowers: 'path_flowers', puddle: 'path_pond', leaves: 'c:mapleleaf', butterfly: 'path_flowers', bush: 'path_woods', bench: 'walk', sound: 'path_woods', dig: 'dig', stick: 'c:twig', picnic: 'path_meadow' };
 import { BODY_TYPES, EAR_TYPES, TAIL_TYPES, EYE_TYPES, MARKINGS, PALETTES, NAME_IDEAS, FOODS, TOYS, WEARABLES, DECOR, DECOR_SLOTS, COLLECTIBLES, TRICKS, FRIEND_LEVELS, PET_SPOTS, SPOT_NAMES, foodDef, toyDef } from './data';
 import { reactionFor, addJournal } from './memory';
 import { drawPet, defaultPose, newRig } from './pet/render';
@@ -286,13 +289,15 @@ export class UI {
     if (g.mode === 'title' || g.mode === 'adopt') { this.clearHud(); return; }
     this.renderTop();
     this.root.classList.toggle('closeup', g.mode === 'closeup');
-    this.root.classList.toggle('minigame', g.mode === 'minigame');
+    this.root.classList.toggle('minigame', g.mode === 'minigame' || g.mode === 'walk');
+    this.root.classList.toggle('walk', g.mode === 'walk');
     this.bottom.innerHTML = '';
     this.closeTray();
     if (g.mode === 'free') this.renderFreeBar();
     else if (g.mode === 'closeup') this.renderCloseBar();
     else if (g.mode === 'minigame') this.renderMiniHud();
-    if (g.mode !== 'minigame') { this.miniHud.innerHTML = ''; this.miniHud.className = 'mini-hud'; }
+    else if (g.mode === 'walk') this.renderWalk();
+    if (g.mode !== 'minigame' && g.mode !== 'walk') { this.miniHud.innerHTML = ''; this.miniHud.className = 'mini-hud'; }
   }
 
   private renderTop() {
@@ -344,6 +349,10 @@ export class UI {
       inGarden ? this.barBtn('home', 'Home', () => g.goZone('room')) : this.barBtn('outside', 'Garden', () => g.goZone('garden'), g.friendLevel < 1 ? 'locked' : ''),
     );
     this.bottom.append(bar);
+    if (inGarden && !g.toys.active && g.walk.canStart()) {
+      this.bottom.prepend(h('div', { class: 'toy-chip walk-chip' }, img('walk', 'ic small'), h('span', { class: 'chip-hint' }, 'The gate leads to the park…'),
+        h('button', { class: 'btn small primary', onclick: () => { g.audio.click(); g.walk.start(); } }, 'Walkies!')));
+    }
     if (g.toys.active) {
       const act = { ball: 'Throw!', squeaky: 'Throw!', wand: 'Wiggle!', bubbles: 'Blow!' }[g.toys.active];
       this.bottom.prepend(h('div', { class: 'toy-chip' }, img(g.toys.active, 'ic small'), h('span', { class: 'chip-hint' }, toyDef(g.toys.active).hint),
@@ -375,6 +384,7 @@ export class UI {
       }
       if (g.save.inventory.toys.includes('bubbles')) this.tray.append(item('bubbles', 'Bubble Party', () => g.mini.start('bubbles'), '40s game'));
       this.tray.append(item('dig', 'Treasure Sniff', () => g.mini.start('sniff'), g.friendLevel < 1 ? 'needs Pals' : 'garden game', g.friendLevel < 1));
+      this.tray.append(item('walk', 'Walkies', () => g.walk.start(), g.walk.canStart() ? 'a stroll in the park' : 'needs Pals', !g.walk.canStart()));
       if (g.save.inventory.toys.length < TOYS.length) this.tray.append(item('bag', 'More toys', () => this.openShop('toys'), 'in the shop'));
     } else if (kind === 'care') {
       this.tray.append(
@@ -450,6 +460,44 @@ export class UI {
     }
     const back = h('button', { class: 'round-btn back-btn', 'aria-label': 'Back to room', onclick: () => { g.audio.click(); cu.close(); } }, img('back'));
     this.bottom.append(h('div', { class: 'close-ui' }, h('div', { class: 'close-head' }, back, tabs), panel));
+  }
+
+  private renderWalk() {
+    const g = this.g, w = g.walk;
+    this.miniHud.className = 'mini-hud show walk-hud';
+    this.miniHud.innerHTML = '';
+    const dots = h('div', { class: 'walk-dots', 'aria-label': `Stop ${Math.min(w.idx + 1, w.stops.length)} of ${w.stops.length}${w.chosen ? '' : '+'}` });
+    const total = w.chosen ? w.stops.length : w.stops.length + 2;
+    for (let i = 0; i < total; i++) dots.append(h('span', { class: 'dot' + (i < w.idx || (i === w.idx && w.phase === 'wait') ? ' done' : i === w.idx ? ' on' : '') }));
+    const tip = w.tip || { out: 'Off to the park!', travel: `${g.save.pet.name} is exploring… tap things you spot!`, event: `${g.save.pet.name} found something!`, wait: 'Keep walking when you\'re ready', choice: 'Which way?', home: 'Heading home…' }[w.phase];
+    this.miniHud.append(h('div', { class: 'mini-title' }, 'Walkies!'), dots);
+    if (w.phase !== 'home' && w.phase !== 'out') this.miniHud.append(h('button', { class: 'btn small', onclick: () => { g.audio.click(); w.goHomeNow(); } }, img('home', 'ic small'), 'Home'));
+    this.miniHud.append(h('div', { class: 'mini-tip', 'aria-live': 'polite' }, tip));
+    if (w.phase === 'wait') {
+      this.bottom.append(h('div', { class: 'walk-go' }, h('button', { class: 'btn big primary', onclick: () => { g.audio.click(); w.next(); } }, img('walk', 'ic'), 'Keep walking →')));
+      (this.bottom.querySelector('.walk-go button') as HTMLElement | null)?.focus({ preventScroll: true });
+    } else if (w.phase === 'choice' && w.choice) {
+      const card = (i: 0 | 1) => {
+        const p = PATHS[w.choice![i]];
+        return h('button', { class: 'walk-choice', onclick: () => { w.pick(i); } }, img(p.icon, 'ic big'), h('b', {}, p.name), h('small', {}, p.blurb),
+          i === w.prefer ? h('span', { class: 'pref' }, `${g.save.pet.name} keeps looking this way!`) : null);
+      };
+      this.bottom.append(h('div', { class: 'walk-choices', role: 'group', 'aria-label': 'Choose a path' }, card(0), card(1)));
+      (this.bottom.querySelector('.walk-choice') as HTMLElement | null)?.focus({ preventScroll: true });
+    }
+  }
+
+  walkResult(story: string, found: string[], reward: number) {
+    const g = this.g;
+    const box = h('div', { class: 'modal small result walk-result', role: 'dialog', 'aria-label': 'Walk summary' },
+      h('h2', {}, 'What a walk!'),
+      img('walk', 'ic big'),
+      h('p', { class: 'story' }, story),
+      found.length ? h('div', { class: 'found' }, ...found.map((id) => h('div', { class: 'found-item' }, img('c:' + id), h('small', {}, collectDef(id)?.name ?? '')))) : null,
+      h('p', { class: 'reward' }, img('twinkle', 'ic small'), `+${reward}`),
+      h('button', { class: 'btn primary', onclick: () => this.closeModal(box) }, 'Home sweet home ♥'),
+    );
+    this.openModal(box);
   }
 
   private renderMiniHud() {
@@ -644,6 +692,7 @@ export class UI {
           fav('Favorite toy', m.favToy, m.favToy ? toyDef(m.favToy).name : undefined),
           fav('Loves', m.favSpot ? 'heart' : undefined, m.favSpot ? SPOT_NAMES[m.favSpot as keyof typeof SPOT_NAMES] : undefined),
           fav('Not a fan of', m.dislikedFood, m.dislikedFood ? foodDef(m.dislikedFood).name : undefined),
+          fav('Favorite walk spot', m.walk.fav ? PATHS_ICON[m.walk.fav] : undefined, m.walk.fav ? `LOVES ${SPOT_TEXT[m.walk.fav as WalkKind]}` : undefined),
         ));
         body.append(h('h4', {}, 'Foods tried'));
         const fg = h('div', { class: 'grid' });
@@ -675,7 +724,15 @@ export class UI {
           const n = m.collect[c.id] ?? 0;
           grid.append(h('div', { class: 'cell' + (n ? '' : ' unknown') }, n ? img('c:' + c.id) : h('span', { class: 'q' }, '?'), h('small', {}, n ? c.name : '???'), n > 1 ? h('span', { class: 'rate' }, `×${n}`) : null));
         }
-        body.append(h('p', { class: 'panel-tip' }, `${Object.keys(m.collect).length} / ${COLLECTIBLES.length} found — dig in the garden!`), grid);
+        const found = COLLECTIBLES.filter((c) => m.collect[c.id]).length;
+        body.append(h('p', { class: 'panel-tip' }, `${found} / ${COLLECTIBLES.length} found — dig in the garden!`), grid);
+        const kg = h('div', { class: 'grid' });
+        for (const c of KEEPSAKES) {
+          const n = m.collect[c.id] ?? 0;
+          kg.append(h('div', { class: 'cell' + (n ? '' : ' unknown') + (c.weight < 2 ? ' rare' : '') }, n ? img('c:' + c.id) : h('span', { class: 'q' }, '?'), h('small', {}, n ? c.name : '???'), n > 1 ? h('span', { class: 'rate' }, `×${n}`) : null));
+        }
+        const kf = KEEPSAKES.filter((c) => m.collect[c.id]).length;
+        body.append(h('h4', {}, 'Walk keepsakes'), h('p', { class: 'panel-tip' }, `${kf} / ${KEEPSAKES.length} — found on Walkies${m.walk.walks ? ` (${m.walk.walks} walk${m.walk.walks > 1 ? 's' : ''} so far)` : ''}`), kg);
       } else if (t === 'memories') {
         const list = h('div', { class: 'mem-list' });
         for (const e of [...m.journal].reverse()) {

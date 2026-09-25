@@ -312,3 +312,29 @@ html.reduced *, html.reduced *::before, html.reduced *::after { animation-durati
   #ui.closeup .tab span { display: none; }
   .hint { font-size: .85em; padding: 8px 12px; }
 }
+
+/* ---------- Walkies ---------- */
+.walk-dots { display: flex; gap: 6px; align-items: center; }
+.walk-dots .dot { width: 14px; height: 14px; border-radius: 50%; background: #f3e2ea; border: 2px solid #e6c9d6; }
+.walk-dots .dot.on { background: var(--pink); border-color: var(--pink-deep); transform: scale(1.2); }
+.walk-dots .dot.done { background: var(--gold); border-color: #d9a520; }
+.walk-go { display: flex; justify-content: center; width: 100%; padding-bottom: 6px; }
+.walk-choices { display: flex; gap: 12px; justify-content: center; width: min(640px, 100%); padding-bottom: 6px; }
+.walk-choice { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 10px; min-height: 150px; border: none; border-radius: var(--r); background: rgba(255,250,244,.97); box-shadow: var(--shadow); font: inherit; color: inherit; cursor: pointer; }
+.walk-choice b { font-size: 1.15em; }
+.walk-choice small { color: var(--ink-soft); font-weight: 700; }
+.walk-choice .pref { font-size: .8em; font-weight: 800; color: var(--pink-deep); }
+.walk-choice:focus-visible, .walk-go .btn:focus-visible { outline: 4px solid var(--gold); outline-offset: 2px; }
+.walk-choice:active { transform: translateY(3px) scale(0.97); }
+.ic.big { width: 72px; height: 72px; }
+#ui .walk-choices, #ui .walk-go { pointer-events: auto; }
+.walk-hud .btn.small { min-height: 36px; }
+.walk-result .story { font-size: 1.1em; font-weight: 700; line-height: 1.45; max-width: 34ch; margin: 6px auto; }
+.walk-result .found { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.walk-result .found-item { display: flex; flex-direction: column; align-items: center; width: 84px; }
+.walk-result .found-item .ic { width: 52px; height: 52px; }
+.cell.rare:not(.unknown) { background: linear-gradient(#fff8d8, #ffeaa8); }
+@media (max-width: 520px) { .walk-choice { min-height: 128px; padding: 10px 6px; } .ic.big { width: 58px; height: 58px; } }
+/* on walks the bottom belongs to the choice cards / Keep walking button: toasts go under the HUD */
+#ui.walk .toasts { top: calc(env(safe-area-inset-top) + 190px); bottom: auto; }
+@media (max-width: 520px) { #ui.walk .toasts { top: calc(env(safe-area-inset-top) + 150px); } }

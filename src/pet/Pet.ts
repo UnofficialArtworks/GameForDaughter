@@ -78,6 +78,12 @@ export class Pet {
   asleep = false;
   carried = false;
   hatLeaf = 0;
+  /** Colour of the leaf stuck on its head (autumn leaves on walks). */
+  leafCol = '#9ccc4a';
+  /** Seconds left with a flower petal stuck on its nose. */
+  nosePetal = 0;
+  /** Size multiplier for the held item (an absurdly big stick…). */
+  heldScale = 1;
   private stepCount = 0;
 
   constructor(public g: Game) {}
@@ -256,6 +262,7 @@ export class Pet {
 
     if (this.emoteT > 0) { this.emoteT -= dt; if (this.emoteT <= 0) this.emoteK = null; }
     if (this.thoughtT > 0) { this.thoughtT -= dt; if (this.thoughtT <= 0) this.thought = null; }
+    if (this.nosePetal > 0) this.nosePetal = Math.max(0, this.nosePetal - dt);
   }
 
   /**
@@ -310,7 +317,7 @@ export class Pet {
 
   private updateCamGlance(dt: number) {
     const c = this.camGlance, g = this.g;
-    const free = g.mode === 'free' && !this.asleep && !this.carried && this.lookCam < 0.3 && this.body !== 'belly' && this.pose.walk < 0.4;
+    const free = (g.mode === 'free' || g.mode === 'walk') && !this.asleep && !this.carried && this.lookCam < 0.3 && this.body !== 'belly' && this.pose.walk < 0.4;
     if (c.left > 0) { c.left -= dt; c.v = free ? 0.75 : 0; if (c.left <= 0) c.v = 0; return; }
     c.v = 0;
     c.t -= dt;
@@ -376,16 +383,24 @@ export class Pet {
       ctx.save();
       ctx.translate(this.rig.hx + 6, this.rig.hy - this.rig.R * 0.95);
       ctx.rotate(0.5);
-      ctx.fillStyle = '#9ccc4a'; ctx.strokeStyle = '#5a8a2a'; ctx.lineWidth = 2;
+      ctx.fillStyle = this.leafCol; ctx.strokeStyle = this.leafCol === '#9ccc4a' ? '#5a8a2a' : '#a0521f'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(-16, 0); ctx.quadraticCurveTo(0, -14, 16, 0); ctx.quadraticCurveTo(0, 14, -16, 0); ctx.fill(); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(-16, 0); ctx.lineTo(12, 0); ctx.stroke();
+      ctx.restore();
+    }
+    if (this.nosePetal > 0) {
+      ctx.save();
+      ctx.translate(this.rig.noseX + 2, this.rig.noseY - 3);
+      ctx.rotate(-0.5);
+      ctx.fillStyle = '#ff9ec4'; ctx.strokeStyle = '#d4668f'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(0, 7); ctx.bezierCurveTo(-8, 1, -4, -7, 0, -4); ctx.bezierCurveTo(4, -7, 8, 1, 0, 7); ctx.fill(); ctx.stroke();
       ctx.restore();
     }
     // held item in mouth
     if (this.held) {
       ctx.save();
-      ctx.translate(this.rig.mouthX, this.rig.mouthY + 6);
-      drawIcon(ctx, this.held, 34);
+      ctx.translate(this.rig.mouthX + (this.heldScale - 1) * 10, this.rig.mouthY + 6);
+      drawIcon(ctx, this.held, 34 * this.heldScale);
       ctx.restore();
     }
     ctx.restore();

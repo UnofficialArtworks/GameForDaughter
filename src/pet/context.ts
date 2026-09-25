@@ -5,7 +5,7 @@ import type { MemoryData } from '../state';
 
 /** Things the pet remembers for a few minutes. */
 export type Recent = 'fed' | 'favFood' | 'petted' | 'favSpot' | 'fetch' | 'fetchMiss' | 'toy' | 'trick' | 'bathed' | 'brushed'
-  | 'woke' | 'garden' | 'fromGarden' | 'treasure' | 'greeted' | 'sniffed' | 'played' | 'request';
+  | 'woke' | 'garden' | 'fromGarden' | 'treasure' | 'greeted' | 'sniffed' | 'played' | 'request' | 'walked';
 
 /** Short-term memory: timestamps (game seconds) of recent events, plus an optional detail. */
 export class ShortTerm {
@@ -35,9 +35,10 @@ export class ShortTerm {
  * - brush: brushed often → leans into the brush as soon as it appears
  * - tricks: practises tricks often → sits attentively for lessons, shows off unprompted
  * - bath: bathed regularly → stops hesitating at bath time
+ * - walkies: goes on walks often → recognises the garden gate, sometimes waits there
  */
-export type HabitId = 'fetch' | 'bedCuddle' | 'garden' | 'brush' | 'tricks' | 'bath';
-export const HABITS: HabitId[] = ['fetch', 'bedCuddle', 'garden', 'brush', 'tricks', 'bath'];
+export type HabitId = 'fetch' | 'bedCuddle' | 'garden' | 'brush' | 'tricks' | 'bath' | 'walkies';
+export const HABITS: HabitId[] = ['fetch', 'bedCuddle', 'garden', 'brush', 'tricks', 'bath', 'walkies'];
 /** Journal lines written once, when a habit first becomes noticeable. */
 export const HABIT_NOTES: Record<HabitId, string> = {
   fetch: '{n} has started bringing the ball over on their own.',
@@ -46,6 +47,7 @@ export const HABIT_NOTES: Record<HabitId, string> = {
   brush: '{n} gets excited whenever the brush comes out!',
   tricks: '{n} loves lessons — they sit up straight when it\'s trick time.',
   bath: '{n} isn\'t nervous about baths anymore.',
+  walkies: '{n} knows what the garden gate means now: WALKIES!',
 };
 export const HABIT_NOTICE = 0.45;
 

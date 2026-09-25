@@ -1,5 +1,5 @@
 // Procedural icon art shared by the world canvas and the DOM UI (via data URLs).
-import { COLLECTIBLES, DECOR, WEARABLES } from './data';
+import { DECOR, WEARABLES, collectDef } from './data';
 import { ellipse, heartPath, starPath, roundRect, shade } from './util';
 
 const OL = '#4a3340';
@@ -222,11 +222,20 @@ const ICONS: Record<string, (ctx: CanvasRenderingContext2D) => void> = {
   sniff: (c) => { c.font = '26px system-ui'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = OL; c.fillText('?', 0, 0); },
   music: (c) => { c.font = 'bold 28px system-ui'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#ff8ac0'; c.fillText('♫', 0, 0); },
   sound: (c) => { c.beginPath(); c.moveTo(-14, -5); c.lineTo(-7, -5); c.lineTo(2, -13); c.lineTo(2, 13); c.lineTo(-7, 5); c.lineTo(-14, 5); c.closePath(); fs(c, '#7fc8ff'); c.beginPath(); c.arc(4, 0, 9, -0.8, 0.8); c.stroke(); c.beginPath(); c.arc(4, 0, 14, -0.8, 0.8); c.stroke(); },
+  walk: (c) => { // paw prints along a path
+    c.save(); c.rotate(-0.5);
+    for (const [x, y] of [[-8, 12], [8, 2], [-8, -8], [8, -18]]) { ellipse(c, x, y + 3, 5, 4); fs(c, '#ff8ab5', 1.5); for (const dx of [-4, 0, 4]) { ellipse(c, x + dx, y - 3, 1.8, 1.8); c.fillStyle = '#ff8ab5'; c.fill(); } }
+    c.restore();
+  },
+  path_flowers: (c) => { ellipse(c, 0, 14, 19, 5); fs(c, '#8fd070', 1.5); for (const [x, y, col] of [[-10, 2, '#ff8ab5'], [2, -6, '#ffe066'], [11, 4, '#c9a8ff']] as [number, number, string][]) { c.strokeStyle = '#4f9a45'; c.lineWidth = 2; c.beginPath(); c.moveTo(x, y); c.lineTo(x, 14); c.stroke(); for (let k = 0; k < 5; k++) { const a = (k / 5) * Math.PI * 2; ellipse(c, x + Math.cos(a) * 4.5, y + Math.sin(a) * 4.5, 3.6, 3.6); fs(c, col, 1); } ellipse(c, x, y, 2.5, 2.5); c.fillStyle = '#ffcf3f'; c.fill(); } },
+  path_pond: (c) => { ellipse(c, 0, 6, 19, 10); fs(c, '#7fc8ff'); ellipse(c, -6, 3, 6, 2); c.fillStyle = 'rgba(255,255,255,0.7)'; c.fill(); ellipse(c, 8, 8, 6, 3); fs(c, '#6cc25a', 1.5); c.strokeStyle = '#4f9a45'; c.lineWidth = 2.5; for (const x of [-14, -10]) { c.beginPath(); c.moveTo(x, 8); c.lineTo(x + 2, -14); c.stroke(); } ellipse(c, -8, -15, 3, 6); fs(c, '#8a5a33', 1.2); },
+  path_woods: (c) => { for (const [x, s, col] of [[-9, 1, '#4f9a45'], [8, 0.8, '#6cb85a']] as [number, number, string][]) { c.beginPath(); c.rect(x - 2.5, 4, 5, 12); fs(c, '#9a6a45', 1.5); c.beginPath(); c.moveTo(x - 12 * s, 6); c.lineTo(x, -18 * s); c.lineTo(x + 12 * s, 6); c.closePath(); fs(c, col); } ellipse(c, 12, 12, 5, 3); fs(c, '#f08a3c', 1.2); },
+  path_meadow: (c) => { ellipse(c, 0, 10, 19, 8); fs(c, '#a6e08a', 1.5); ellipse(c, 8, -8, 7, 7); fs(c, '#ffe066', 1.5); c.beginPath(); c.moveTo(-14, 10); c.lineTo(-4, 2); c.lineTo(6, 10); c.closePath(); fs(c, '#ff9a8a', 1.5); c.strokeStyle = '#4f9a45'; c.lineWidth = 2; for (const x of [-16, -12, 12, 16]) { c.beginPath(); c.moveTo(x, 14); c.lineTo(x - 2, 4); c.stroke(); } },
   camera: (c) => { roundRect(c, -16, -9, 32, 22, 4); fs(c, '#9aa7c8'); ellipse(c, 0, 2, 7, 7); fs(c, '#e8f0ff'); },
 };
 
 function drawCollectible(ctx: CanvasRenderingContext2D, id: string) {
-  const d = COLLECTIBLES.find((c) => c.id === id);
+  const d = collectDef(id);
   if (!d) return;
   const c = ctx, col = d.color;
   switch (d.shape) {
@@ -244,6 +253,13 @@ function drawCollectible(ctx: CanvasRenderingContext2D, id: string) {
     case 'key': ellipse(c, -8, 0, 7, 7); fs(c, col); c.beginPath(); c.rect(-2, -2.5, 20, 5); fs(c, col); c.beginPath(); c.rect(12, 2, 3, 6); fs(c, col, 1.5); break;
     case 'crystal': c.beginPath(); c.moveTo(0, -18); c.lineTo(10, -4); c.lineTo(6, 16); c.lineTo(-6, 16); c.lineTo(-10, -4); c.closePath(); fs(c, col); c.beginPath(); c.moveTo(0, -18); c.lineTo(0, 16); c.strokeStyle = '#fff'; c.lineWidth = 1.5; c.stroke(); break;
     case 'star': starPath(c, 0, 1, 17, 5, 0.5); fs(c, col); break;
+    case 'maple': c.beginPath(); for (let i = 0; i <= 10; i++) { const a = -Math.PI / 2 + (i / 10) * Math.PI * 2, r = i % 2 ? 8 : 17; c.lineTo(Math.cos(a) * r, Math.sin(a) * r * 0.95); } c.closePath(); fs(c, col); c.beginPath(); c.moveTo(0, -12); c.lineTo(0, 18); c.strokeStyle = shade(col, -0.35); c.stroke(); break;
+    case 'flatstone': ellipse(c, 0, 3, 17, 10, -0.1); fs(c, col); ellipse(c, -5, 0, 6, 3, -0.2); c.fillStyle = 'rgba(255,255,255,0.6)'; c.fill(); break;
+    case 'petal': c.beginPath(); c.moveTo(0, 16); c.bezierCurveTo(-18, 2, -8, -16, 0, -10); c.bezierCurveTo(8, -16, 18, 2, 0, 16); fs(c, col); c.beginPath(); c.moveTo(0, 12); c.lineTo(0, -4); c.strokeStyle = shade(col, -0.2); c.stroke(); break;
+    case 'puff': c.strokeStyle = '#8fbf6a'; c.lineWidth = 2.5; c.beginPath(); c.moveTo(0, 18); c.lineTo(0, 2); c.stroke(); for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2; c.beginPath(); c.moveTo(0, -4); c.lineTo(Math.cos(a) * 13, -4 + Math.sin(a) * 13); c.strokeStyle = '#cfd8e6'; c.lineWidth = 1.5; c.stroke(); ellipse(c, Math.cos(a) * 13, -4 + Math.sin(a) * 13, 2.2, 2.2); c.fillStyle = '#fff'; c.fill(); } ellipse(c, 0, -4, 4, 4); fs(c, '#e8e0c8', 1.2); break;
+    case 'twig': c.strokeStyle = OL; c.lineWidth = 7; c.beginPath(); c.moveTo(-16, 12); c.lineTo(14, -10); c.moveTo(0, 1); c.lineTo(4, -16); c.stroke(); c.strokeStyle = col; c.lineWidth = 4; c.stroke(); ellipse(c, 6, -18, 4, 2.5, -0.5); c.fillStyle = '#7cc36a'; c.fill(); break;
+    case 'heartleaf': c.save(); c.rotate(0.3); heartPath(c, 0, 4, 16); fs(c, col); c.beginPath(); c.moveTo(0, 16); c.lineTo(0, -6); c.strokeStyle = shade(col, -0.35); c.stroke(); c.restore(); break;
+    case 'bigstick': c.strokeStyle = OL; c.lineWidth = 9; c.beginPath(); c.moveTo(-19, 8); c.lineTo(19, -6); c.moveTo(-4, 3); c.lineTo(-8, -12); c.moveTo(9, -2); c.lineTo(14, 8); c.stroke(); c.strokeStyle = col; c.lineWidth = 6; c.stroke(); break;
     case 'rainbow': { const cols = ['#ff7a7a', '#ffc36b', '#fff27a', '#8be38b', '#7ec8ff', '#c49bff']; cols.forEach((cc, i) => { c.beginPath(); c.arc(0, 8, 17 - i * 2.5, Math.PI, 0); c.strokeStyle = cc; c.lineWidth = 3; c.stroke(); }); break; }
   }
 }
