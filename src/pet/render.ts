@@ -478,8 +478,12 @@ function drawEar(ctx: CanvasRenderingContext2D, type: string, main: string, inne
   }
 }
 
-/** A floppy ear in head space: root on the skull → soft fold (joint) → rounded tip. */
-export interface FloppyEar { rx: number; ry: number; jx: number; jy: number; tx: number; ty: number; front: number; }
+/**
+ * A floppy ear in head space: root on the skull → soft fold (joint) → rounded tip.
+ * `front`: the ear is on the viewer's side of the head, so it is drawn over the face (after the eyes);
+ * otherwise it is drawn behind the head. Always one layer, always opaque: never half see-through.
+ */
+export interface FloppyEar { rx: number; ry: number; jx: number; jy: number; tx: number; ty: number; front: boolean; }
 
 /**
  * Floppy (lop) ears. The roots sit on the top-sides of the skull; they are placed in 3D and turned
@@ -507,11 +511,10 @@ export function floppyEars(p: Pose, R: number, hf: number, hrot: number): Floppy
     const splay = Math.max(0.02, 0.12 + perk * 0.18);
     const b2 = side * splay + base * 0.6 + tip - hrot * 0.75;
     const L2 = R * 0.62;
-    out.push({ rx, ry, jx, jy, tx: jx + Math.sin(b2) * L2, ty: jy + Math.cos(b2) * L2, front: smooth01(depth / (0.02 * R) * 0.5 + 0.5) });
+    out.push({ rx, ry, jx, jy, tx: jx + Math.sin(b2) * L2, ty: jy + Math.cos(b2) * L2, front: depth > 0 });
   }
   return out;
 }
-const smooth01 = (t: number) => { const x = clamp01(t); return x * x * (3 - 2 * x); };
 
 function drawFloppyEar(ctx: CanvasRenderingContext2D, e: FloppyEar, R: number, fill: string, line: string, tipCol: string | null) {
   // spine = quadratic curve root → (joint) → tip, sampled; half-width swells toward the middle
@@ -578,9 +581,9 @@ function drawHead(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, pal: P
     flops = floppyEars(p, R, hf, rig.hrot);
     // hit points: middle of each flap (the near one first)
     const mid = (e: FloppyEar) => toRig((e.jx + e.tx) / 2, (e.jy + e.ty) / 2);
-    const [a, b] = flops[0].front >= flops[1].front ? [flops[0], flops[1]] : [flops[1], flops[0]];
+    const [a, b] = flops[0].front || !flops[1].front ? [flops[0], flops[1]] : [flops[1], flops[0]];
     rig.earN = mid(a); rig.earF = mid(b);
-    for (const e of flops) if (e.front < 1) drawFloppyEar(ctx, e, R, shade(earCol, -0.1), line, earTip && shade(earTip, -0.1));
+    for (const e of flops) if (!e.front) drawFloppyEar(ctx, e, R, shade(earCol, -0.1), line, earTip && shade(earTip, -0.1));
   } else {
     // upright ears stand behind the skull, so the head outline hides their base
     let aN: number, aF: number;
@@ -731,13 +734,7 @@ function drawHead(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, pal: P
 
   drawWear(ctx, wear, R, faceX, nearX, farX, eyeY, er, farS, hf, pal, 'body');
   // floppy ears on the viewer's side lie over the face: drawn after the eyes so they cover them
-  for (const e of flops) {
-    if (e.front <= 0) continue;
-    ctx.save();
-    ctx.globalAlpha = e.front;
-    drawFloppyEar(ctx, e, R, earCol, line, earTip);
-    ctx.restore();
-  }
+  for (const e of flops) if (e.front) drawFloppyEar(ctx, e, R, earCol, line, earTip);
   drawWear(ctx, wear, R, faceX, nearX, farX, eyeY, er, farS, hf, pal, 'head');
 }
 

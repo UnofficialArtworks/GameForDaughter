@@ -19,12 +19,12 @@ describe('floppy ears', () => {
 
   it('layers correctly: in 3/4 view the near ear is over the face and the far one behind the head', () => {
     const [left, right] = floppyEars(defaultPose(), R, 0, 0);
-    expect(left.front).toBe(1);
-    expect(right.front).toBe(0);
+    expect(left.front).toBe(true);
+    expect(right.front).toBe(false);
     // at rest the near ear hangs at the back of the head, well clear of the eyes (which sit at x ≥ 0)
     expect(left.tx / R).toBeLessThan(-0.4);
     expect(left.jx / R).toBeLessThan(-0.4);
     // facing us, both ears frame the face from in front
-    expect(floppyEars(defaultPose(), R, 1, 0).every((e) => e.front === 1)).toBe(true);
+    expect(floppyEars(defaultPose(), R, 1, 0).every((e) => e.front)).toBe(true);
   });
 });
