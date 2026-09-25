@@ -384,6 +384,7 @@ export class UI {
     }
     this.tray.className = 'tray show';
     (this.tray.querySelector('button:not([disabled])') as HTMLElement)?.focus();
+    g.brain.anticipate(kind); // the pet sees what you're reaching for
   }
 
   closeTray() { this.trayKind = null; this.tray.className = 'tray'; this.tray.innerHTML = ''; }
@@ -568,6 +569,8 @@ export class UI {
   }
 
   // ---------- modals ----------
+  modalOpen() { return this.modalRoot.querySelector('.backdrop') !== null; }
+
   openModal(box: HTMLElement) {
     const back = h('div', { class: 'backdrop', onclick: (e: Event) => { if (e.target === back) this.closeModal(box); } }, box);
     this.modalRoot.append(back);
@@ -737,8 +740,8 @@ export class UI {
             const owned = s.inventory.decor.includes(d.id);
             const on = s.equipped.decor[d.slot] === d.id;
             const act = owned
-              ? h('button', { class: 'btn small' + (on ? ' on' : ''), disabled: on || undefined, onclick: () => { s.equipped.decor[d.slot] = d.id; g.world.cacheKey = ''; g.brain.buzz += 0.5; show(t); } }, on ? 'Placed ✓' : 'Place')
-              : priceBtn(d.price, () => buy(d.price, () => { s.inventory.decor.push(d.id); s.equipped.decor[d.slot] = d.id; g.world.cacheKey = ''; g.brain.buzz += 0.6; show(t); }));
+              ? h('button', { class: 'btn small' + (on ? ' on' : ''), disabled: on || undefined, onclick: () => { s.equipped.decor[d.slot] = d.id; g.world.cacheKey = ''; g.noticeDecor(d.slot); show(t); } }, on ? 'Placed ✓' : 'Place')
+              : priceBtn(d.price, () => buy(d.price, () => { s.inventory.decor.push(d.id); s.equipped.decor[d.slot] = d.id; g.world.cacheKey = ''; g.noticeDecor(d.slot); show(t); }));
             grid.append(card('d:' + d.id, d.name, act));
           }
         }

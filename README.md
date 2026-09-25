@@ -53,6 +53,15 @@ keyboard (Tab / Enter / Esc).
   zoomies, tail-chasing, grooming, rolling on the rug, bringing you toys, asking for food, play, cuddles or a trip
   outside, performing tricks it has learned, and rare surprises (sneezes, hiccups, dozing off, hearing
   something behind it, singing, a butterfly landing on its nose, a leaf falling on its head, pouncing on your finger).
+- **Context, anticipation & habits**: the brain's choices read what just happened (a few minutes of short-term
+  memory: just ate, just played fetch four times, just had a bath, just woke up…), so the pet hiccups after gobbling,
+  flops panting after a big fetch session, gets post-bath zoomies and stays extra poofy, and doesn't ask to play
+  right after playing. Most behaviours are short chains that start with a look (eyes → head → body) before moving.
+  It reacts to what's *about* to happen: opening the food/toy/care tray, picking up the ball, the brush or the bath
+  appearing, trick time. Six slow habits (fetch, bedtime cuddles, garden trips, brushing, tricks, baths) form from
+  repetition, fade gently over days, and are announced in the journal when they appear. Requests are paced, expire
+  on their own and never cost anything when ignored. Friendship changes behaviour (eye contact, closeness, greetings,
+  bringing toys, napping near you); greetings differ by personality and time away.
 - **Personality**: six continuous traits, rolled randomly for each pet. They affect speed, sleepiness, bravery around new
   things, how it returns the ball (or plays keep-away), cuddliness, pickiness, and how fast it learns tricks. The
   memory book reveals them gradually.
@@ -82,7 +91,8 @@ src/
   memory.ts          pure preference & learning logic (tasting, petting spots, toys, tricks, journal)
   pet/render.ts      procedural pet renderer (pose parameters → layered vector drawing)
   pet/Pet.ts         pet entity: movement, pose/expression blending, gaze, blinking, springs, hit zones
-  pet/brain.ts       moods, utility AI, behaviour scripts (generators), tricks
+  pet/brain.ts       moods, utility AI, behaviour chains (generators), anticipation, greetings, tricks
+  pet/context.ts     short-term memory, habits, request pacing (pure logic)
   interact.ts        pointer input: stroke detection, taps, carrying
   closeup.ts         close-up stage: cuddle, hand-feeding, brush, bath, trick training
   toys.ts            ball / squeaky / wand / bubbles and the pet's play logic

@@ -58,6 +58,10 @@ export class Pet {
   lookAt: { x: number; y: number } | null = null;
   lookCam = 0; // 0..1 how much to face the camera
   private glance = { x: 0, y: 0, t: 0 };
+  /** Idle eye contact: a brief look at you now and then (more often, and longer, as friendship grows). */
+  private camGlance = { v: 0, t: 4, left: 0 };
+  /** How long the current gaze target has been behind the pet (it turns only after a beat). */
+  private behindT = 0;
   private blinkT = 2; private blinkPhase = 0;
   // ears [left, right] in pet-local space: a stiff base that follows the head and a soft tip that lags
   private earBase = [new Spring(240, 17), new Spring(240, 17)];
@@ -102,7 +106,7 @@ export class Pet {
     const b = this.g.world.walkBounds();
     this.tx = clamp(x, b.x0, b.x1);
     this.ty = clamp(y, b.y0, b.y1);
-    this.speed = speed * (0.85 + this.g.save.pet.traits.energy * 0.3);
+    this.speed = speed * (0.85 + this.g.save.pet.traits.energy * 0.3) * this.g.brain.pace();
     this.moving = true;
   }
   face(dir: number) { if (dir !== 0) this.facingTarget = dir > 0 ? 1 : -1; }
@@ -177,7 +181,8 @@ export class Pet {
     for (const k of ['crouch', 'sit', 'lie', 'bow'] as const) p[k] = damp(p[k], (o[k] ?? bodyT[k] ?? 0) as number, rate, dt);
     const bellyT = this.body === 'belly' ? 1 : 0;
     p.belly = damp(p.belly, o.belly ?? bellyT, 6, dt);
-    const faceCam = Math.max(this.lookCam, turnBoost);
+    this.updateCamGlance(dt);
+    const faceCam = Math.max(this.lookCam, turnBoost, this.camGlance.v);
     p.front = damp(p.front, Math.max(o.front ?? 0, turnBoost * 0.95), turnBoost > 0 ? 30 : 7, dt);
     p.headFront = damp(p.headFront, Math.max(o.headFront ?? 0, faceCam * 0.8), 8, dt);
     p.headDown = damp(p.headDown, o.headDown ?? 0, 10, dt);
@@ -191,7 +196,8 @@ export class Pet {
     p.dirt = damp(p.dirt, clamp01((0.55 - n.clean) * 2), 2, dt);
     p.wet = damp(p.wet, o.wet ?? p.wet, 3, dt);
     p.foam = damp(p.foam, o.foam ?? p.foam, 4, dt);
-    p.floof = damp(p.floof, o.floof ?? 0, 0.6, dt);
+    // fresh out of the bath (or a good brushing) the fur stays extra poofy for a while
+    p.floof = damp(p.floof, o.floof ?? clamp01(this.g.brain.poof / 40), 0.6, dt);
     for (const k of FACE_KEYS) {
       if (k === 'special') continue;
       const def = k === 'eyeOpen' || k === 'pupil' ? 1 : k === 'tailUp' ? 0.5 : 0;
@@ -210,9 +216,10 @@ export class Pet {
 
     // ---------- blink ----------
     this.blinkT -= dt;
+    const drowsy = this.g.brain.drowsy || this.g.save.pet.needs.energy < 0.3;
     if (this.blinkT <= 0 && p.special === 0) {
-      this.blinkPhase = 0.13;
-      this.blinkT = rand(1.8, 5.5);
+      this.blinkPhase = drowsy ? 0.32 : 0.13; // sleepy pets blink slowly…
+      this.blinkT = drowsy ? rand(1.2, 3) : rand(1.8, 5.5); // …and more often
       if (chance(0.2)) this.blinkT = 0.25; // double blink
     }
     if (this.blinkPhase > 0) {
@@ -228,9 +235,12 @@ export class Pet {
       const dx = (lookT.x - hx) * this.facing, dy = lookT.y - hy;
       lx = clamp(dx / 120, -1, 1);
       ly = clamp(dy / 120, -1, 1);
-      if (dx < -60 && !this.moving && this.lookCam < 0.5 && !this.carried && this.body !== 'lie' && this.body !== 'belly' && !this.asleep) this.face(-this.facing);
-    }
-    if (this.lookCam > 0.3) { lx *= 1 - this.lookCam * 0.7; ly = lerp(ly, 0.15, this.lookCam); }
+      // eyes → head → body: the eyes go first; the body only turns if the target stays behind for a beat
+      this.behindT = dx < -60 ? this.behindT + dt : 0;
+      if (this.behindT > 0.3 && !this.moving && this.lookCam < 0.5 && !this.carried && this.body !== 'lie' && this.body !== 'belly' && !this.asleep) this.face(-this.facing);
+    } else this.behindT = 0;
+    const lc = Math.max(this.lookCam, this.camGlance.v);
+    if (lc > 0.3) { lx *= 1 - lc * 0.7; ly = lerp(ly, 0.15, lc); }
     p.lookX = damp(p.lookX, lx, 16, dt);
     p.lookY = damp(p.lookY, ly, 16, dt);
     // subtle head tilt toward look target when it's above/below
@@ -296,6 +306,18 @@ export class Pet {
     p.earR = lim(this.earBase[1], -0.5, 0.5);
     p.earTipL = lim(this.earTip[0], -1.2, 0.35);
     p.earTipR = lim(this.earTip[1], -0.35, 1.2);
+  }
+
+  private updateCamGlance(dt: number) {
+    const c = this.camGlance, g = this.g;
+    const free = g.mode === 'free' && !this.asleep && !this.carried && this.lookCam < 0.3 && this.body !== 'belly' && this.pose.walk < 0.4;
+    if (c.left > 0) { c.left -= dt; c.v = free ? 0.75 : 0; if (c.left <= 0) c.v = 0; return; }
+    c.v = 0;
+    c.t -= dt;
+    if (c.t > 0 || !free) return;
+    const fl = g.friendLevel, cuddly = g.save.pet.traits.cuddly;
+    c.t = rand(5, 11) * (1.5 - fl * 0.18 - cuddly * 0.3);
+    c.left = rand(0.7, 1.2) + fl * 0.25;
   }
 
   private idleGazeTarget(): { x: number; y: number } | null {

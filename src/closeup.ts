@@ -23,6 +23,8 @@ export class CloseUp {
   auto: { zone: string; t: number } | null = null;
   highFiveFlash = 0;
   private fluffyShown = false;
+  /** A short reaction to play before settling back into the idle loop (e.g. bath jitters). */
+  private pending: Gen | null = null;
 
   constructor(public g: Game) {}
 
@@ -53,8 +55,9 @@ export class CloseUp {
     this.sub = sub;
     this.food = null; this.tool = null; this.auto = null;
     this.trick.phase = 'idle';
-    if (sub === 'brush') this.tool = { kind: 'brush', ...this.restPos(), drag: false, id: -1 };
+    if (sub === 'brush') { this.tool = { kind: 'brush', ...this.restPos(), drag: false, id: -1 }; this.pending = this.brushHello(); }
     if (sub === 'bath') this.startBath();
+    if (sub === 'tricks') this.pending = this.lessonReady();
     if (sub === 'feed') g.hint('feed', 'Pick a snack, then drag it to your pet\'s mouth (or tap your pet)!');
     if (sub === 'tricks') g.hint('tricks', 'Ask for a trick, then reward a good try with a treat!');
     if (g.pet.actionName !== 'closeup') g.pet.run(this.idleLoop(false), 'closeup', 2);
@@ -74,9 +77,17 @@ export class CloseUp {
       const b = g.world.zoneBounds(g.zone);
       const tx = clamp(pet.x, b.x0 + 140, b.x1 - 140), ty = Math.max(pet.y, 600);
       if (dist(pet.x, pet.y, tx, ty) > 10) { pet.expr = 'happy'; yield* walk(pet, tx, ty, 200, 3); }
+      if (g.friendLevel === 0 && g.save.pet.traits.brave < 0.6 && (g.save.memory.counters.pets ?? 0) < 25) {
+        // still getting to know you: a careful sniff of your hand first
+        pet.body = 'sit'; pet.o.front = 1; pet.lookCam = 1; pet.expr = 'curious';
+        pet.o.sniff = 1; pet.o.headDown = 0.25; g.audio.sniff();
+        yield* wait(pet, 0.9);
+        pet.o = {};
+      }
       pet.expr = 'happy'; pet.jump(160); g.audio.voice('happy');
     }
     while (true) {
+      if (this.pending) { const p = this.pending; this.pending = null; yield* p; pet.o = {}; continue; }
       pet.moving = false;
       pet.body = this.bathOn && this.bathStage === 2 ? 'stand' : 'sit';
       pet.o.front = 1; pet.lookCam = 1;
@@ -87,6 +98,16 @@ export class CloseUp {
       if (this.food) pet.lookAt = { x: this.food.x, y: this.food.y };
       else if (this.tool?.drag) pet.lookAt = { x: this.tool.x, y: this.tool.y };
       else pet.lookAt = null;
+      // favourite snack in sight: can't sit still
+      if (this.food && !this.food.eating && g.save.memory.favFood === this.food.id) { pet.o.tailWag = 1.6; pet.o.tilt = Math.sin(g.time * 13) * 0.03; }
+      // a brush-lover leans toward the brush as it comes near, eyes already half closed
+      if (this.sub === 'brush' && this.tool && this.brushFan() && g.time - this.brushRecent > 0.5) {
+        const [hx, hy] = pet.headPos();
+        const near = clamp01(1 - (dist(this.tool.x, this.tool.y, hx, hy) - 60) / 220);
+        pet.o.tilt = clamp((this.tool.x - pet.x) * 0.001, -0.1, 0.1) * near;
+        pet.o.headTilt = clamp((this.tool.x - hx) * 0.003, -0.3, 0.3) * near;
+        if (near > 0.5) pet.expr = 'love';
+      } else if (this.sub === 'brush') { pet.o.tilt = undefined; }
       // occasional cute head tilt
       if (chance(pet.dt * 0.25)) pet.o.headTilt = rand(-0.3, 0.3);
       if (chance(pet.dt * 0.3)) pet.o.headTilt = 0;
@@ -109,10 +130,31 @@ export class CloseUp {
     const exp = expectedFood(g.save.memory, id);
     const brave = g.save.pet.traits.brave;
     pet.lookAt = { x: this.food!.x, y: this.food!.y };
-    if (exp === 'love') {
+    const tr = g.save.pet.traits;
+    if (exp === 'love' && g.save.memory.favFood === id) {
+      // THE favourite: a gasp, eyes huge, ears up — then happy hops and "gimme" paws
+      pet.expr = 'surprised'; pet.o.eyeWide = 1; pet.o.pupil = 1.5; pet.o.earPerk = 1; pet.squash(0.35); g.audio.voice('surprise');
+      yield* wait(pet, 0.4);
+      pet.o = {}; pet.expr = 'starry'; pet.emote('heart'); g.audio.voice('excited'); pet.o.tailWag = 1.6; pet.o.earPerk = 1;
+      for (let i = 0; i < 3; i++) { pet.jump(170 + i * 20); pet.o.paw = i % 2 ? 0.9 : 0.3; yield* wait(pet, 0.34); }
+      pet.o.paw = 0.8; pet.o.tongue = 0.8; pet.expr = 'excited';
+    } else if (exp === 'love') {
       pet.expr = 'starry'; pet.emote('heart'); g.audio.voice('excited');
       for (let i = 0; i < 2; i++) { pet.jump(200); yield* wait(pet, 0.4); }
       pet.o.paw = 0.8; pet.expr = 'excited';
+    } else if (tr.appetite < 0.35 && (exp === 'like' || exp === 'neutral')) {
+      // picky: a very serious inspection before deciding it's acceptable
+      pet.o.sniff = 1; pet.o.headDown = 0.3; g.audio.sniff();
+      yield* wait(pet, 0.7);
+      pet.o = {}; pet.o.brow = 0.6; pet.o.headTilt = -0.25; pet.expr = 'curious'; // a look at you: "is this… the good stuff?"
+      yield* wait(pet, 0.8);
+      pet.o = {}; pet.o.sniff = 1; pet.o.headDown = 0.2; g.audio.sniff();
+      yield* wait(pet, 0.6);
+      pet.o = {}; pet.expr = exp === 'like' ? 'happy' : 'neutral'; g.audio.voice('hmm');
+    } else if (tr.appetite > 0.7 && exp !== 'dislike') {
+      // a foodie: anything is exciting
+      pet.expr = 'excited'; pet.o.tongue = 0.7; pet.o.tailWag = 1.3; g.audio.voice('happy'); pet.jump(150);
+      yield* wait(pet, 0.6); pet.o.tongue = 0;
     } else if (exp === 'like') {
       pet.expr = 'happy'; pet.o.tongue = 0.6; g.audio.voice('happy');
       yield* wait(pet, 0.6); pet.o.tongue = 0;
@@ -145,7 +187,9 @@ export class CloseUp {
     const g = this.g, pet = g.pet, s = g.save;
     const def = foodDef(id);
     if (id !== 'kibble') s.inventory.foods[id] = Math.max(0, (s.inventory.foods[id] ?? 0) - 1);
+    const favBefore = s.memory.favFood === id;
     const r = tasteFood(s.memory, s.pet.hidden, id);
+    const fav = favBefore || r.newFavorite;
     pet.o = {}; pet.body = 'sit'; pet.o.front = 1; pet.lookCam = 1;
     // lean in & bite
     const bites = r.reaction === 'dislike' ? 1 : 3;
@@ -156,8 +200,13 @@ export class CloseUp {
       if (this.food) this.food.bites = i + 1;
       g.audio.crunch(); g.fx.crumbs(...pet.mouthPos(), 3, id === 'kibble' ? '#c9853f' : '#ffd0a0');
       pet.o.headDown = 0; pet.expr = 'chew';
-      let t = 0; while (t < 0.45) { t += pet.dt; pet.o.mouthOpen = Math.abs(Math.sin(t * 14)) * 0.35; yield; }
-      pet.o.mouthOpen = 0;
+      let t = 0;
+      while (t < 0.45) {
+        t += pet.dt; pet.o.mouthOpen = Math.abs(Math.sin(t * 14)) * 0.35;
+        if (fav) { pet.o.eyeHappy = 1; pet.o.tilt = Math.sin(t * 16) * 0.04; pet.o.tailWag = 1.6; } // happy nom-nom wiggle
+        yield;
+      }
+      pet.o.mouthOpen = 0; pet.o.tilt = 0;
     }
     this.food = null;
     const n = s.pet.needs;
@@ -170,8 +219,27 @@ export class CloseUp {
     }
     if (!s.flags.firstFeed) { s.flags.firstFeed = true; g.achieve('feed', 'First Snack'); }
     g.brain.fulfil('kibble');
+    g.brain.st.mark('fed', id);
+    if (fav) g.brain.st.mark('favFood', id);
     switch (r.reaction) {
       case 'love':
+        if (fav && g.friendLevel >= 2) {
+          // favourite food from a close friend: a full celebration dance
+          pet.o = {}; pet.expr = 'starry'; g.audio.voice('excited');
+          pet.jump(320); g.fx.hearts(pet.x, pet.y - 180, 6); yield* wait(pet, 0.6);
+          yield* TRICK_ANIMS.spin(pet);
+          if (g.friendLevel >= 3) { yield* TRICK_ANIMS.rollover(pet); }
+          pet.o = {}; pet.body = 'sit'; pet.o.front = 1; pet.lookCam = 1; pet.expr = 'love'; pet.o.tongue = 0.7;
+          let t = 0, nt = 0;
+          while (t < 1.8) { // a happy little song
+            t += pet.dt; pet.o.tilt = Math.sin(t * 5) * 0.08; pet.o.headTilt = Math.sin(t * 5) * 0.2;
+            if (t > nt) { nt = t + 0.45; const [hx, hy] = pet.headPos(); g.fx.note(hx, hy - 40); }
+            yield;
+          }
+          pet.o.tilt = 0; pet.o.headTilt = 0;
+          g.addFriend('feed', 5);
+          break;
+        }
         pet.expr = 'starry'; g.audio.voice('excited'); g.fx.hearts(pet.x, pet.y - 180, 4);
         pet.jump(300); yield* wait(pet, 0.7);
         if (g.friendLevel >= 1) yield* TRICK_ANIMS.spin(pet);
@@ -245,6 +313,59 @@ export class CloseUp {
     g.hint('bath', 'Scrub bubbles onto your pet!');
     const brave = g.save.pet.traits.brave;
     g.pet.expr = brave < 0.35 ? 'surprised' : 'joy';
+    this.pending = this.bathHello();
+  }
+
+  /** How a pet feels about bath time shows the moment the tub appears. */
+  private *bathHello(): Gen {
+    const g = this.g, pet = g.pet, tr = g.save.pet.traits, used = g.brain.habit('bath');
+    pet.o = {}; pet.body = 'sit'; pet.o.front = 1; pet.lookCam = 1;
+    if ((tr.playful > 0.6 && tr.brave > 0.5) || used > 0.6) {
+      // a water-lover: splash splash!
+      pet.expr = 'joy'; g.audio.voice('giggle');
+      for (let i = 0; i < 4; i++) { pet.o.paw = i % 2; g.fx.drops(pet.x + pet.facing * 30, pet.y - 80, 4, 160); g.audio.splash(); yield* wait(pet, 0.22); }
+    } else if (tr.brave < 0.4 && used < 0.45) {
+      // cautious: ears flat, a funny scrunched face, leaning away… then a brave little breath
+      pet.expr = 'pout'; pet.o.earPerk = -0.9; pet.o.eyeOpen = 0.45; pet.o.tilt = -0.1; pet.emote('sweat');
+      g.audio.voice('hmm');
+      yield* wait(pet, 1.3);
+      pet.o.tilt = 0; pet.o.eyeOpen = 0; yield* wait(pet, 0.35); // gulp
+      pet.o = {}; pet.expr = 'surprised';
+      yield* wait(pet, 0.4);
+    } else {
+      pet.expr = 'curious'; pet.o.headTilt = 0.3; pet.lookAt = { x: pet.x, y: pet.y - 60 };
+      yield* wait(pet, 0.8);
+      pet.expr = 'happy';
+    }
+    pet.o = {}; pet.lookAt = null;
+  }
+
+  private brushFan() { return this.g.brain.habit('brush') > 0.3 || this.g.save.pet.traits.cuddly > 0.65; }
+
+  /** The brush appears: a brush-lover lights up. */
+  private *brushHello(): Gen {
+    const g = this.g, pet = g.pet;
+    g.brain.grow('brush', 0.03);
+    if (!this.brushFan()) return;
+    pet.o = {}; pet.body = 'sit'; pet.o.front = 1; pet.lookCam = 1;
+    pet.expr = 'love'; pet.o.tailWag = 1.3; g.audio.voice('coo'); pet.jump(120);
+    pet.lookAt = { x: this.tool?.x ?? pet.x, y: this.tool?.y ?? pet.y };
+    yield* wait(pet, 0.9);
+  }
+
+  /** Trick time: a confident (or well-practised) pet sits up straight right away; others tilt their head. */
+  private *lessonReady(): Gen {
+    const g = this.g, pet = g.pet, tr = g.save.pet.traits;
+    pet.o = {}; pet.body = 'sit'; pet.o.front = 1; pet.lookCam = 1;
+    if (tr.brave > 0.55 || g.brain.habit('tricks') > 0.35 || g.friendLevel >= 3) {
+      pet.expr = 'focus'; pet.o.earPerk = 1; pet.o.tailWag = 1; pet.squash(-0.2);
+      yield* wait(pet, 0.6);
+      if (g.brain.learnedTricks().includes('highfive')) { pet.o.paw = 0.6; yield* wait(pet, 0.5); pet.o.paw = 0; } // offers a paw, keen to show off
+      yield* wait(pet, 0.4);
+    } else {
+      pet.expr = 'curious'; pet.o.headTilt = 0.35;
+      yield* wait(pet, 0.9);
+    }
   }
 
   private advanceBath() {
@@ -274,6 +395,9 @@ export class CloseUp {
       const s = g.save;
       s.pet.needs.clean = 1;
       pet.o.wet = 0; pet.o.floof = 1;
+      g.brain.poof = 90; // extra poofy for a while afterwards
+      g.brain.st.mark('bathed');
+      g.brain.grow('bath', 0.15);
       g.fx.sparkles(pet.x, pet.y - 110, 12, 90);
       g.bump('baths');
       g.addFriend('bath', 6);
@@ -339,6 +463,8 @@ export class CloseUp {
     const gain = kind === 'treat' ? 1 : kind === 'praise' ? 0.75 : 0.35;
     const speed = s.pet.traits.playful * 0.5 + s.pet.traits.brave * 0.2 + 0.3 + g.friendLevel * 0.05;
     const learned = practiceTrick(s.memory, id, gain, speed);
+    g.brain.st.mark('trick', id);
+    g.brain.grow('tricks', 0.03);
     g.addFriend('trick', kind === 'none' ? 1 : 3);
     g.bump('tricks');
     if (kind !== 'none') {
@@ -427,6 +553,8 @@ export class CloseUp {
         g.addFriend('brush', 1.2);
         g.bump('brushes');
         g.brain.purr = 0.7;
+        g.brain.st.mark('brushed');
+        g.brain.grow('brush', 0.012);
       }
       if ((pet.o.floof ?? 0) >= 0.98 && !this.fluffyShown) {
         this.fluffyShown = true;

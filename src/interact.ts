@@ -126,6 +126,10 @@ export class Interaction {
       s.pet.needs.affection = clamp01(s.pet.needs.affection + 0.035 * r.intensity);
       g.bump('pets');
       g.addFriend('pet', 1.2 * r.intensity);
+      g.brain.st.mark('petted', zone);
+      if (s.memory.favSpot === zone) g.brain.st.mark('favSpot', zone);
+      // cuddles at sleepy time turn into a bedtime habit
+      if (s.pet.needs.energy < 0.45 || g.world.isNight()) g.brain.grow('bedCuddle', 0.02);
       g.brain.noteInteraction(0.03);
       if (zone === 'belly') g.brain.fulfil('belly');
       else g.brain.fulfil('heart');
@@ -143,7 +147,7 @@ export class Interaction {
     const lying = pet.body === 'lie' || pet.body === 'belly';
     if (!lying && !close) pet.body = 'sit';
     let level = 0, t = 0;
-    let offeredBelly = false;
+    let offeredBelly = false, flopped = false, favT = 0;
     while (g.time - this.lastStroke < 1.4) {
       t += pet.dt;
       const zone = this.strokeZone ?? 'head';
@@ -156,27 +160,34 @@ export class Interaction {
       const target = stroking ? clamp01(0.35 + liking * 0.5 + (s.pet.traits.cuddly - 0.5) * 0.3) * (tickle ? 0.6 : 1) : level * 0.97;
       level += (target - level) * Math.min(1, pet.dt * 2.2);
       const [hx] = pet.headPos();
-      // lean into the hand
-      pet.o.tilt = clamp((this.handX - hx) * 0.0015 * pet.facing, -0.12, 0.12) * level;
-      pet.o.headTilt = clamp((this.handX - hx) * 0.004 * pet.facing, -0.35, 0.35) * level;
+      // lean into the hand (much harder at the favourite spot)
+      const lean = fav ? 1.7 : 1;
+      pet.o.tilt = clamp((this.handX - hx) * 0.0015 * pet.facing * lean, -0.12 * lean, 0.12 * lean) * level;
+      pet.o.headTilt = clamp((this.handX - hx) * 0.004 * pet.facing * lean, -0.35 * lean, 0.35 * lean) * level;
+      if (fav && stroking) favT += pet.dt;
       pet.lookCam = close ? 1 : 0.7;
-      if (close && !lying) pet.o.front = 1;
+      if (close && !lying && !flopped && !offeredBelly) pet.o.front = 1;
       if (tickle && stroking) {
         pet.expr = 'joy';
         pet.o.tilt = Math.sin(t * 30) * 0.08;
         if (g.time - this.lastGiggle > 0.9) { this.lastGiggle = g.time; g.audio.voice('giggle'); }
         pet.o.eyeOpen = undefined;
-      } else if (level > 0.55) {
-        pet.expr = 'bliss';
+      } else if (level > (fav ? 0.35 : 0.55)) {
+        pet.expr = 'bliss'; // eyes closed, melting
       } else if (level > 0.25) {
         pet.expr = 'love';
       } else {
         pet.expr = 'happy';
       }
       pet.o.earPerk = zone === 'head' || zone === 'ears' ? -0.8 * level : undefined;
-      pet.o.tailWag = 0.4 + level * 0.8;
+      pet.o.tailWag = 0.4 + level * (fav ? 1.4 : 0.8); // the favourite spot gets the tail going
       pet.o.kick = fav && level > 0.6 && (zone === 'back' || zone === 'belly' || zone === 'ears') && stroking ? 1 : 0;
-      g.brain.purr = Math.max(g.brain.purr, level * (0.6 + truth * 0.6));
+      g.brain.purr = Math.max(g.brain.purr, level * (0.6 + truth * 0.6) * (fav ? 1.25 : 1));
+      // the favourite spot, long enough: melts into a flop onto its side
+      if (fav && !flopped && !lying && favT > 2.4 && level > 0.6) {
+        flopped = true;
+        pet.body = 'lie'; pet.o.front = 0; pet.squash(0.3); g.audio.voice('coo'); pet.emote('heart');
+      }
       if (stroking && g.time - this.lastVoice > 3.5 && chance(pet.dt * 2)) { this.lastVoice = g.time; g.audio.voice('coo'); }
       // a very happy pet may roll over to offer its belly
       if (!offeredBelly && level > 0.6 && t > 3 && (s.pet.hidden.spot.belly > 0.6 || g.friendLevel >= 3) && chance(pet.dt * 0.4)) {
@@ -197,6 +208,7 @@ export class Interaction {
   // ---------- taps ----------
   private tapPet(zone: string, wx: number, wy: number) {
     const g = this.g, pet = g.pet;
+    if (g.brain.takeOffer()) return; // high five!
     g.brain.noteInteraction(0.08);
     if (g.mode === 'free' && !g.toys.active && !pet.busy(2)) { g.closeup.open('cuddle'); return; }
     if (g.mode !== 'closeup' && g.toys.active) return;
@@ -204,6 +216,8 @@ export class Interaction {
     const tr = g.save.pet.traits;
     pet.run((function* (): Gen {
       pet.lookCam = 1;
+      // a friend a little unsure of you pulls back a touch before enjoying it
+      if (g.friendLevel === 0 && tr.brave < 0.35 && chance(0.5) && !pet.asleep) { pet.expr = 'surprised'; pet.o.tilt = -0.08; yield* wait(pet, 0.35); pet.o = {}; }
       if (pet.asleep) {
         pet.o.eyeOpen = 0.4; pet.expr = 'sleepy';
         yield* wait(pet, 1); pet.asleep = true; pet.expr = 'asleep'; return;

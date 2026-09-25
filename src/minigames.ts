@@ -1,7 +1,7 @@
 // Two short activities: Bubble Party (pop bubbles together) and Treasure Sniff (hot/cold digging).
 import type { Game } from './game';
 import type { Gen } from './pet/Pet';
-import { wait, walk } from './pet/brain';
+import { wait, walk, admire } from './pet/brain';
 import { chance, clamp, dist, ellipse, lerp, rand, weighted } from './util';
 import { FLOOR_BOT, FLOOR_TOP, GARDEN } from './world/world';
 import { drawIcon } from './art';
@@ -38,6 +38,8 @@ export class MiniGames {
   private holes: { x: number; y: number }[] = [];
   private popItem: { icon: string; x0: number; y0: number; t: number } | null = null;
   private taps = 0;
+  /** The last treasure dug up this round (the pet shows it off at the end). */
+  private lastFound: string | null = null;
   private hotIdle = 0;
 
   constructor(public g: Game) {}
@@ -48,7 +50,7 @@ export class MiniGames {
     if (g.mode === 'closeup') g.closeup.close();
     g.toys.clear();
     g.pet.held = null;
-    this.id = id; this.t = 0; this.score = 0; this.petScore = 0;
+    this.id = id; this.t = 0; this.score = 0; this.petScore = 0; this.lastFound = null;
     g.mode = 'minigame';
     if (id === 'bubbles') {
       this.dur = 40;
@@ -101,7 +103,17 @@ export class MiniGames {
     if (newBest && this.score > 0) addJournal(m, id === 'bubbles' ? 'bubbles' : 'dig', id === 'bubbles' ? `New Bubble Party record: ${this.score} pops!` : `Found ${this.score} treasures in Treasure Sniff!`);
     if (id === 'bubbles' && this.score >= 30) g.achieve('bubble30', 'Bubble Champion');
     g.ui.miniResult(id, this.score, reward, newBest, this.petScore);
-    g.pet.run((function* (): Gen { g.pet.lookCam = 1; g.pet.expr = 'starry'; g.pet.jump(280); yield* wait(g.pet, 1.5); })(), 'mini', 1);
+    g.brain.st.mark('played', id);
+    const found = id === 'sniff' ? this.lastFound : null, won = this.score > 0;
+    g.pet.run((function* (): Gen {
+      const pet = g.pet;
+      pet.lookCam = 1; pet.expr = 'starry'; pet.jump(280);
+      yield* wait(pet, 1.5);
+      // proud of the haul: carries the last treasure around for a moment and admires it
+      if (found) { pet.held = 'c:' + found; yield* admire(g.brain); pet.held = null; }
+      // a pet that knows High Five offers one after a good game
+      if (won && g.friendLevel >= 2 && chance(0.6)) yield* g.brain.offerHighFive();
+    })(), 'mini', 1);
   }
 
   update(dt: number) {
@@ -385,6 +397,8 @@ export class MiniGames {
     pet.held = 'c:' + c.id;
     pet.jump(260); g.audio.voice('excited');
     g.collect(c.id, pet.x + pet.facing * 30, pet.y - 70);
+    this.lastFound = c.id;
+    g.brain.st.mark('treasure', c.id);
     this.say(`${g.save.pet.name} found ${/^[aeiou]/i.test(c.name) ? 'an' : 'a'} ${c.name}! Sniff out another!`, 3);
     yield* wait(pet, 1.3);
     pet.held = null;

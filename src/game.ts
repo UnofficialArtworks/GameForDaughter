@@ -2,7 +2,8 @@
 import { AudioManager } from './audio';
 import { FX } from './fx';
 import { Pet } from './pet/Pet';
-import { Brain, wait, walk, wakeUp, digAt, TRICK_ANIMS } from './pet/brain';
+import { Brain, wait, walk, digAt, TRICK_ANIMS } from './pet/brain';
+import { fadeHabits } from './pet/context';
 import type { Gen } from './pet/Pet';
 import { World, Zone, ROOM, GARDEN } from './world/world';
 import { Toys } from './toys';
@@ -13,7 +14,7 @@ import { UI } from './ui';
 import { SaveData, writeSave, friendshipLevel, dayKey, applyOffline, TraitId } from './state';
 import { COLLECTIBLES, FRIEND_LEVELS, FRIEND_UNLOCKS, foodDef, toyDef, SPOT_NAMES, PetSpot, TRICKS } from './data';
 import { addJournal, bump, playToy, addRecent } from './memory';
-import { clamp, damp, rand, chance, pick } from './util';
+import { clamp, damp, rand, chance } from './util';
 
 export type Mode = 'title' | 'adopt' | 'free' | 'closeup' | 'minigame';
 
@@ -248,8 +249,10 @@ export class Game {
     this.zone = z;
     this.audio.open();
     if (!this.pet.busy(2)) { this.pet.stop(); this.brain.idle = 0; }
+    this.brain.st.mark(z === 'garden' ? 'garden' : 'fromGarden');
     if (z === 'garden') {
       this.brain.fulfil('outside');
+      this.brain.grow('garden', 0.06);
       if (!this.save.flags.visitedGarden) {
         this.save.flags.visitedGarden = true;
         addJournal(this.save.memory, 'outside', `First trip to the garden together!`);
@@ -423,49 +426,27 @@ export class Game {
     s.lastDay = today;
     this.mode = 'free';
     this.ui.refresh();
-    if (returning && newDay) { this.bump('days'); }
+    if (returning && newDay) { this.bump('days'); fadeHabits(s.memory, Math.max(1, Math.floor(away / 86400))); }
     if (returning && away > 3600) {
       this.ui.banner(away > 86400 ? 'YOU\'RE BACK!' : 'Welcome back!');
-      this.pet.run(this.greet(away > 86400 * 0.75 || newDay), 'greet', 3);
+      this.pet.run(this.brain.greet(away, away > 86400 * 0.75 || newDay), 'greet', 3);
       addRecent(s.memory, 'greeted');
     } else if (returning) {
-      this.pet.run(this.greet(false), 'greet', 3);
+      this.pet.run(this.brain.greet(away, false), 'greet', 3);
     }
     if (returning && newDay) this.earn(10, true);
     writeSave(s);
   }
 
-  *greet(gift: boolean): Gen {
-    const pet = this.pet;
-    pet.x = 900; pet.y = 560; pet.body = 'stand';
-    if (this.world.isNight() && pet.g.save.pet.needs.energy < 0.5) {
-      pet.x = 150; pet.y = 560; pet.body = 'lie'; pet.asleep = true;
-      yield* wait(pet, 1.5);
-      pet.asleep = false; pet.o = {};
-      pet.expr = 'surprised'; pet.emote('!');
-      yield* wait(pet, 0.5);
-      yield* wakeUp(pet);
-    }
-    pet.expr = 'excited'; pet.emote('!');
-    this.audio.voice('excited');
-    const [fx, fy] = this.frontPoint();
-    yield* walk(pet, fx, fy, 320);
-    pet.lookCam = 1;
-    for (let i = 0; i < 3; i++) { pet.jump(280); this.fx.hearts(pet.x, pet.y - 170); yield* wait(pet, 0.45); }
-    if (this.friendLevel >= 2) yield* TRICK_ANIMS.spin(pet);
-    if (this.friendLevel >= 4) { yield* TRICK_ANIMS.rollover(pet); pet.expr = 'starry'; }
-    pet.body = 'sit'; pet.expr = 'love'; pet.lookCam = 1;
-    this.fx.hearts(pet.x, pet.y - 170, 4);
-    yield* wait(pet, 1.2);
-    if (gift) {
-      const c = pick(COLLECTIBLES.filter((c) => c.weight >= 5));
-      pet.held = 'c:' + c.id; pet.expr = 'happy';
-      this.toast('gift', `${this.save.pet.name} saved a gift for you!`, 'c:' + c.id);
-      yield* wait(pet, 1.2);
-      pet.held = null;
-      this.collect(c.id, pet.x + pet.facing * 40, pet.y - 20);
-      yield* wait(pet, 1);
-    }
+  /** A new decoration was placed: the pet will go and check it out. */
+  noticeDecor(slot: string) {
+    const spot: Record<string, [number, number, number?]> = {
+      bed: [...this.world.poi('bed')] as [number, number], rug: [...this.world.poi('rug')] as [number, number],
+      bowls: [...this.world.poi('food')] as [number, number], basket: [...this.world.poi('basket')] as [number, number],
+      wall: [695, 520, 200], curtains: [430, 500, 260], garden: [...this.world.poi('decor')] as [number, number],
+    };
+    const p = spot[slot];
+    if (p) this.brain.noticeNew(p[0], p[1], p[2]);
   }
 
   /** Called when player taps floor/garden: pet comes over (personality-flavoured). */
@@ -479,15 +460,22 @@ export class Game {
     if (dig) { this.pet.run(digAt(this.brain, dig.x, dig.y, false), 'dig', 1); this.bump('digs'); return; }
     this.brain.noteInteraction(0.05);
     this.pet.run((function* (g: Game): Gen {
+      // eyes first, ears up… then it decides to come
       pet.lookAt = { x: tx, y: ty - 30 };
       pet.o.earPerk = 1;
       if (pet.asleep || pet.body === 'lie') { yield* wait(pet, 0.4); }
-      yield* wait(pet, tr.cuddly < 0.3 ? 0.9 : 0.25);
-      pet.expr = 'happy';
-      yield* walk(pet, tx, ty, 150 + tr.energy * 80);
+      const fl = g.friendLevel;
+      const unsure = fl === 0 && tr.brave < 0.5;
+      yield* wait(pet, tr.cuddly < 0.3 ? 0.9 : unsure ? 0.7 : 0.25);
+      if (unsure) { pet.o.headTilt = 0.3; pet.expr = 'curious'; yield* wait(pet, 0.4); pet.o.headTilt = undefined; }
+      pet.expr = fl >= 2 ? 'excited' : 'happy';
+      if (fl >= 2) pet.o.tailWag = 1.4;
+      yield* walk(pet, tx, ty, (150 + tr.energy * 80) * (unsure ? 0.7 : 1 + fl * 0.06));
       pet.lookAt = null; pet.lookCam = 1;
       pet.body = 'sit';
-      if (chance(0.4)) g.audio.voice('happy');
+      if (unsure) { pet.o.sniff = 1; pet.o.headDown = 0.3; g.audio.sniff(); yield* wait(pet, 0.6); pet.o.sniff = 0; pet.o.headDown = 0; }
+      if (chance(0.4 + fl * 0.1)) g.audio.voice('happy');
+      if (fl >= 3 && chance(0.3)) { pet.o.tilt = 0.08; pet.o.headTilt = 0.3; } // a little lean toward you
       yield* wait(pet, 1.5);
     })(this), 'called', 1);
   }

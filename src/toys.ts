@@ -19,6 +19,11 @@ export class Toys {
   throws = 0;
   onBubblePop: ((byPet: boolean, gold: boolean) => void) | null = null;
   private lastBlow = { x: 0, y: 0 };
+  /** The pet recognised its favourite toy: skip the wind-up and dash. */
+  private eager = false;
+  /** An independent pet may finish what it's doing before chasing the first throw. */
+  private dawdle = false;
+  private spawnThrows = 0;
 
   constructor(public g: Game) {}
 
@@ -33,6 +38,9 @@ export class Toys {
       this.wand.x = this.wand.tx = fx + 120; this.wand.y = this.wand.ty = fy - 200;
     }
     g.pet.run(this.playLoop(), 'toy', 2);
+    this.spawnThrows = 0;
+    g.brain.fulfil(id);
+    g.brain.st.mark('toy', id);
     this.reactToToy(id);
   }
 
@@ -73,7 +81,11 @@ export class Toys {
   private reactToToy(id: string) {
     const g = this.g, pet = g.pet;
     const liking = g.save.memory.toys[id]?.liking ?? 0.4;
-    if (g.save.memory.favToy === id) { pet.expr = 'starry'; pet.jump(260); g.audio.voice('excited'); pet.emote('heart'); }
+    if (g.save.memory.favToy === id) {
+      // THE favourite: instant recognition — ears up, tail going, eyes locked on
+      pet.expr = 'starry'; pet.jump(260); g.audio.voice('excited'); pet.emote('heart');
+      pet.o.earPerk = 1; pet.o.tailWag = 1.6; this.eager = true;
+    }
     else if (liking > 0.55) { pet.expr = 'excited'; pet.jump(180); g.audio.voice('happy'); }
     else if (!g.save.memory.toys[id]) { pet.expr = 'curious'; pet.emote('?'); g.audio.voice('question'); g.brain.buzz += 0.3; }
     else { pet.expr = 'happy'; }
@@ -165,6 +177,10 @@ export class Toys {
   private onThrow() {
     const g = this.g;
     this.throws++;
+    this.spawnThrows++;
+    const tr = g.save.pet.traits;
+    if (this.spawnThrows === 1 && tr.cuddly < 0.35 && g.save.memory.favToy !== this.thr?.kind && chance(0.4)) this.dawdle = true;
+    if (this.thr) g.brain.fulfil(this.thr.kind);
     g.audio.whoosh();
     g.brain.noteInteraction(0.15);
     g.observe('throw');
@@ -265,7 +281,9 @@ export class Toys {
       pet.lookAt = { x: t.x, y: t.y - t.z };
       pet.body = t.grabbed ? 'crouch' : 'sit';
       pet.expr = 'focus';
-      pet.o.tailWag = 0.8;
+      pet.o.tailWag = t.grabbed ? 1.3 : 0.8;
+      // ball in your hand: eyes on it, butt wiggling, ready to spring
+      if (t.grabbed) { pet.o.tilt = Math.sin(g.time * 22) * 0.035; pet.o.earPerk = 1; pet.o.pupil = 1.45; }
       if (t.kind === 'squeaky' && this.squeaks >= 1 && !t.grabbed) {
         // head tilt at the squeak, then pounce
         this.squeaks = 0;
@@ -281,10 +299,21 @@ export class Toys {
       // lost interest while it lies still far away? go get it anyway if playful
       if (!chance(0.5 + tr.playful * 0.5)) { pet.body = 'sit'; pet.lookAt = { x: t.x, y: t.y }; yield* wait(pet, 1); return; }
     }
-    // anticipation crouch then chase
+    if (this.dawdle) {
+      // "I'll get it… in a second." A look at the toy, a casual look away, then off it goes
+      this.dawdle = false;
+      pet.body = 'sit'; pet.lookAt = { x: t.x, y: t.y - t.z }; pet.expr = 'neutral';
+      yield* wait(pet, 0.5);
+      pet.lookAt = { x: pet.x - pet.facing * 200, y: pet.y - 120 }; pet.o.paw = 0.6; pet.o.tongue = 0.6;
+      yield* wait(pet, 0.9);
+      pet.o = {}; pet.lookAt = { x: t.x, y: t.y }; pet.expr = 'mischief';
+      yield* wait(pet, 0.3);
+    }
+    // anticipation crouch then chase (straight away for the favourite toy)
     pet.lookAt = { x: t.x, y: t.y - t.z };
     pet.body = 'crouch'; pet.expr = 'focus';
-    yield* wait(pet, 0.35 - tr.energy * 0.2 + (tr.brave < 0.3 ? 0.2 : 0));
+    yield* wait(pet, this.eager ? 0.05 : 0.35 - tr.energy * 0.2 + (tr.brave < 0.3 ? 0.2 : 0));
+    this.eager = false;
     pet.body = 'stand'; pet.expr = 'excited';
     let time = 0;
     while (this.active && !t.carried && time < 8) {
@@ -300,8 +329,10 @@ export class Toys {
       if (t.z > 80 && dist(pet.x, pet.y, t.x, t.y) < 80 && pet.z === 0) pet.jump(380);
       yield;
     }
-    if (!t.carried) return;
+    if (!t.carried) { g.brain.st.mark('fetchMiss', t.kind); return; }
     const pr = g.memoryToy(t.kind);
+    g.brain.st.mark('fetch', t.kind);
+    g.brain.grow('fetch', 0.025);
     g.addFriend('fetch', 2);
     const n = g.save.pet.needs;
     n.fun = clamp01(n.fun + 0.07); n.energy = clamp01(n.energy - 0.015);
@@ -345,12 +376,14 @@ export class Toys {
   }
 
   private *proud(): Gen {
-    const pet = this.g.pet;
+    const g = this.g, pet = g.pet;
     pet.lookCam = 1; pet.body = 'bow'; pet.expr = 'excited'; pet.o.tailWag = 1;
-    this.g.audio.voice('happy');
+    g.audio.voice('happy');
     yield* wait(pet, 0.9);
     pet.body = 'sit'; pet.expr = 'happy';
     yield* wait(pet, 0.3);
+    // on a winning streak, a pet that knows High Five sometimes offers one
+    if (g.friendLevel >= 2 && g.brain.st.count('fetch', 240) >= 2 && chance(0.3)) yield* g.brain.offerHighFive();
     pet.lookCam = 0;
   }
 

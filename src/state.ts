@@ -29,6 +29,8 @@ export interface MemoryData {
   journal: JournalEntry[];
   recent: { t: number; what: string }[];
   counters: Record<string, number>;
+  /** Slow-moving behavioural tendencies (see pet/context.ts). Missing in older saves → {}. */
+  habits: Record<string, number>;
 }
 export interface Settings { music: number; sfx: number; reducedMotion: boolean; highContrast: boolean; largeText: boolean; }
 export interface SaveData {
@@ -103,7 +105,7 @@ export function makeHidden(seed: number, traits: Traits): Hidden {
 export function emptyMemory(): MemoryData {
   const tricks: MemoryData['tricks'] = {};
   for (const t of TRICKS) tricks[t.id] = { prof: 0, learned: false, performed: 0 };
-  return { foods: {}, toys: {}, spots: {}, tricks, traitsRevealed: [], collect: {}, journal: [], recent: [], counters: {} };
+  return { foods: {}, toys: {}, spots: {}, tricks, traitsRevealed: [], collect: {}, journal: [], recent: [], counters: {}, habits: {} };
 }
 
 export function dayKey(t: number) {
