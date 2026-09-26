@@ -44,11 +44,20 @@ export class MiniGames {
 
   constructor(public g: Game) {}
 
+  /** Stop without results (used when switching pets). */
+  reset() {
+    this.id = null; this.treasure = null; this.queued = null; this.marker = null; this.popItem = null; this.holes = [];
+    this.reacting = false; this.walking = false; this.phase = 'search';
+    this.g.toys.onBubblePop = null;
+  }
+
   start(id: MiniId) {
     const g = this.g;
     if (id === 'sniff' && g.friendLevel < 1) return;
+    if (g.walk.active || g.mode === 'title' || g.mode === 'adopt') return;
     if (g.mode === 'closeup') g.closeup.close();
     g.toys.clear();
+    g.input.cancelAll('game start');
     g.pet.held = null;
     this.id = id; this.t = 0; this.score = 0; this.petScore = 0; this.lastFound = null;
     g.mode = 'minigame';
@@ -85,7 +94,8 @@ export class MiniGames {
     this.id = null;
     g.toys.onBubblePop = null;
     g.toys.clear();
-    g.mode = 'free';
+    g.input.cancelAll('game end');
+    if (g.mode === 'minigame') g.mode = 'free';
     g.pet.stop();
     g.pet.held = null;
     this.treasure = null; this.queued = null; this.marker = null; this.popItem = null; this.holes = [];
@@ -148,9 +158,9 @@ export class MiniGames {
   }
 
   /** Pointer down on the canvas during an activity. Returns true when handled. */
-  onDown(wx: number, wy: number): boolean {
+  onDown(wx: number, wy: number, pointerId = 99): boolean {
     const g = this.g;
-    if (this.id === 'bubbles') return g.toys.onDown(wx, wy, 99);
+    if (this.id === 'bubbles') return g.toys.onDown(wx, wy, pointerId);
     if (this.id !== 'sniff') return false;
     if (this.phase === 'dig') return true; // busy digging: nothing to do yet
     const [x, y] = this.clampSpot(wx, wy);
@@ -162,7 +172,7 @@ export class MiniGames {
     else g.pet.run(this.sniffAt(x, y), 'mini', 3);
     return true;
   }
-  onMove(wx: number, wy: number) { if (this.id === 'bubbles') this.g.toys.onMove(wx, wy, 99); }
+  onMove(wx: number, wy: number, pointerId = 99) { if (this.id === 'bubbles') this.g.toys.onMove(wx, wy, pointerId); }
 
   // ---------- Treasure Sniff: places ----------
 

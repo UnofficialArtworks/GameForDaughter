@@ -5,7 +5,7 @@ import type { MemoryData } from '../state';
 
 /** Things the pet remembers for a few minutes. */
 export type Recent = 'fed' | 'favFood' | 'petted' | 'favSpot' | 'fetch' | 'fetchMiss' | 'toy' | 'trick' | 'bathed' | 'brushed'
-  | 'woke' | 'garden' | 'fromGarden' | 'treasure' | 'greeted' | 'sniffed' | 'played' | 'request' | 'walked';
+  | 'woke' | 'garden' | 'fromGarden' | 'treasure' | 'greeted' | 'sniffed' | 'played' | 'request' | 'walked' | 'groomed';
 
 /** Short-term memory: timestamps (game seconds) of recent events, plus an optional detail. */
 export class ShortTerm {

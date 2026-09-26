@@ -136,10 +136,11 @@ export class Pet {
     this.dt = dt;
     const p = this.pose;
     p.time += dt;
-    // action step
+    // action step (a script that throws just ends: the pet carries on with life)
     if (this.action) {
-      const r = this.action.next();
-      if (r.done) this.stop();
+      let done = false;
+      try { done = !!this.action.next().done; } catch (e) { this.g.diag.error(`pet action "${this.actionName}"`, e); done = true; }
+      if (done) this.stop();
     }
     // locomotion
     let spd = 0;
@@ -202,8 +203,12 @@ export class Pet {
     p.dirt = damp(p.dirt, clamp01((0.55 - n.clean) * 2), 2, dt);
     p.wet = damp(p.wet, o.wet ?? p.wet, 3, dt);
     p.foam = damp(p.foam, o.foam ?? p.foam, 4, dt);
-    // fresh out of the bath (or a good brushing) the fur stays extra poofy for a while
-    p.floof = damp(p.floof, o.floof ?? clamp01(this.g.brain.poof / 40), 0.6, dt);
+    // fresh out of the bath (or a good brushing) the fur stays extra poofy for a while;
+    // while it's being brushed smooth, the poof follows the brush quickly
+    const grooming = !!this.g.closeup.groom;
+    p.floof = damp(p.floof, o.floof ?? clamp01(this.g.brain.poof / 40), grooming ? 4 : 0.6, dt);
+    p.ruffle = damp(p.ruffle, o.ruffle ?? this.g.brain.ruffle, grooming ? 8 : 3, dt);
+    p.shine = damp(p.shine, o.shine ?? clamp01(this.g.brain.shine), 5, dt);
     for (const k of FACE_KEYS) {
       if (k === 'special') continue;
       const def = k === 'eyeOpen' || k === 'pupil' ? 1 : k === 'tailUp' ? 0.5 : 0;

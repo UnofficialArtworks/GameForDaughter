@@ -22,11 +22,12 @@ html.hc { --ink: #1c0f18; --ink-soft: #3a2a33; --line: #4a3340; --card: #ffffff;
 html.hc .btn, html.hc .bar-btn, html.hc .round-btn, html.hc .pill, html.hc .modal, html.hc .tray-item, html.hc .item, html.hc .chip, html.hc .tab { border: 3px solid #1c0f18 !important; }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: #f3dcc6; overscroll-behavior: none; }
-body { font-size: var(--fs); user-select: none; -webkit-user-select: none; touch-action: none; }
+body { font-size: var(--fs); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
 canvas#game { position: fixed; inset: 0; display: block; touch-action: none; cursor: default; }
 #ui { position: fixed; inset: 0; pointer-events: none; }
 #ui > * { pointer-events: none; }
-#ui button, #ui input, #ui .modal, #ui .tray, #ui .toy-chip, #ui .close-ui, #ui .mini-hud.show, #ui .backdrop, #ui .title-screen, #ui .adopt-panel, #ui label { pointer-events: auto; }
+#ui button, #ui input, #ui .modal, #ui .tray.show, #ui .toy-chip, #ui .close-ui, #ui .mini-hud.show, #ui .backdrop, #ui .title-screen, #ui .adopt-panel, #ui label { pointer-events: auto; }
+/* (only things you can see catch taps: an invisible layer must never block the game) */
 button { font: inherit; color: inherit; }
 :focus-visible { outline: 4px solid #5aa9ff !important; outline-offset: 2px; }
 .ic { width: 40px; height: 40px; display: block; pointer-events: none; }
@@ -203,7 +204,7 @@ button { font: inherit; color: inherit; }
 
 /* title */
 .title-screen { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: center; padding: calc(env(safe-area-inset-top) + 6vh) 16px 0; background: linear-gradient(rgba(255,240,230,.55), rgba(255,240,230,0) 60%); }
-.title-card { text-align: center; }
+.title-card { text-align: center; display: flex; flex-direction: column; align-items: center; max-width: 100%; }
 .logo { font-size: clamp(54px, 13vw, 110px); font-weight: 900; color: #fff; letter-spacing: -.02em; line-height: .95; text-shadow: 0 5px 0 #f08aa8, 0 10px 0 #d9678a, 0 16px 30px rgba(120,40,70,.25); animation: bob 3s ease-in-out infinite; }
 .logo-my { font-size: .5em; display: block; color: #ffd166; text-shadow: 0 3px 0 #e0a030; }
 @keyframes bob { 50% { transform: translateY(-6px) rotate(-1deg); } }
@@ -327,7 +328,6 @@ html.reduced *, html.reduced *::before, html.reduced *::after { animation-durati
 .walk-choice:focus-visible, .walk-go .btn:focus-visible { outline: 4px solid var(--gold); outline-offset: 2px; }
 .walk-choice:active { transform: translateY(3px) scale(0.97); }
 .ic.big { width: 72px; height: 72px; }
-#ui .walk-choices, #ui .walk-go { pointer-events: auto; }
 .walk-hud .btn.small { min-height: 36px; }
 .walk-result .story { font-size: 1.1em; font-weight: 700; line-height: 1.45; max-width: 34ch; margin: 6px auto; }
 .walk-result .found { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
@@ -338,3 +338,35 @@ html.reduced *, html.reduced *::before, html.reduced *::after { animation-durati
 /* on walks the bottom belongs to the choice cards / Keep walking button: toasts go under the HUD */
 #ui.walk .toasts { top: calc(env(safe-area-inset-top) + 190px); bottom: auto; }
 @media (max-width: 520px) { #ui.walk .toasts { top: calc(env(safe-area-inset-top) + 150px); } }
+
+/* ---------- several Fuzzlets ---------- */
+.title-screen { overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; padding-bottom: calc(env(safe-area-inset-bottom) + 16px); }
+.pet-cards { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin: 4px auto 10px; max-width: 760px; }
+.pet-card { width: 172px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 10px 12px; border-radius: 24px; border: 0;
+  background: rgba(255, 253, 249, .96); box-shadow: var(--shadow); font: inherit; color: inherit; text-align: center; }
+.pet-card.last { outline: 4px solid rgba(255, 127, 166, .35); }
+.pet-card .pc-name { font-size: 1.2em; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pet-card small { color: var(--ink-soft); font-weight: 700; font-size: .8em; line-height: 1.25; }
+.pet-card .btn { margin-top: 6px; width: 100%; }
+.pet-card.new-pet { justify-content: center; cursor: pointer; border: 3px dashed #f0b8c8; background: #fffaf6; min-height: 230px; }
+.pets-panel { background: rgba(255, 244, 236, .86); border-radius: 30px; padding: 14px 12px 4px; box-shadow: 0 10px 30px rgba(74, 51, 64, .12); display: flex; flex-direction: column; align-items: center; max-width: 100%; }
+.title-card .tagline { margin: 12px 0 14px; }
+.pet-card.new-pet .plus { font-size: 54px; line-height: 1; font-weight: 900; color: var(--pink); }
+.pet-card.new-pet:active { transform: scale(.97); }
+.portrait-mini { border-radius: 50%; background: radial-gradient(#fff, #ffe8ef); display: block; }
+.full-note { font-weight: 800; color: var(--ink-soft); margin: 0 0 6px; }
+.btn.link { background: transparent; box-shadow: none; min-height: 44px; font-size: .9em; color: var(--ink-soft); text-decoration: underline; font-weight: 700; }
+.btn.quiet { background: #f4ebe4; box-shadow: none; color: var(--ink-soft); }
+.pet-options { display: flex; flex-direction: column; gap: 10px; }
+.opt-pet { display: flex; align-items: center; gap: 12px; background: #fff; border-radius: 18px; padding: 8px 12px; }
+.opt-pet b { flex: 1; font-size: 1.1em; }
+.remove-box .portrait-mini { margin: 0 auto 4px; }
+.hold-btn { position: relative; overflow: hidden; touch-action: none; }
+.hold-btn .hold-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(120, 0, 20, .35); pointer-events: none; }
+.hold-btn span { position: relative; }
+.adopt-back { position: absolute; top: calc(env(safe-area-inset-top) + 10px); left: calc(env(safe-area-inset-left) + 10px); pointer-events: auto; }
+.version { margin: 14px 0 0; text-align: center; font-size: .75em; color: var(--ink-soft); opacity: .7; }
+.diag-saved pre { max-height: 220px; overflow: auto; font-size: 11px; background: #fff; border-radius: 10px; padding: 8px; user-select: text; -webkit-user-select: text; white-space: pre-wrap; }
+.diag-overlay { position: fixed; left: 4px; bottom: 4px; z-index: 50; margin: 0; max-width: min(98vw, 620px); padding: 6px 8px; border-radius: 8px;
+  background: rgba(20, 12, 20, .72); color: #e8ffe8; font: 11px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; pointer-events: none; }
+@media (max-width: 560px) { .pet-card { width: 150px; } .pet-card.new-pet { min-height: 200px; } }

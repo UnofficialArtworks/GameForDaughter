@@ -16,6 +16,8 @@ export interface Pose {
   earPerk: number; earL: number; earR: number; earTipL: number; earTipR: number;
   tailWag: number; tailPhase: number; tailUp: number;
   paw: number; shake: number; kick: number; wet: number; dirt: number; foam: number; floof: number;
+  /** Post-bath messy fur (0 groomed … 1 wild tufts everywhere) and the brief shine once brushed smooth. */
+  ruffle: number; shine: number;
   special: number; // 0 none, 1 heart, 2 spiral, 3 star, 4 sleep-closed
   eyePop: number; // 0→1 after the eye style changes (hearts/stars/closed): a quick springy pop instead of a snap
   sniff: number; time: number;
@@ -30,7 +32,7 @@ export function defaultPose(): Pose {
     brow: 0, mouthOpen: 0, smile: 0.4, tongue: 0, blush: 0.3, cheekPuff: 0,
     earPerk: 0, earL: 0, earR: 0, earTipL: 0, earTipR: 0,
     tailWag: 0.3, tailPhase: 0, tailUp: 0.5,
-    paw: 0, shake: 0, kick: 0, wet: 0, dirt: 0, foam: 0, floof: 0,
+    paw: 0, shake: 0, kick: 0, wet: 0, dirt: 0, foam: 0, floof: 0, ruffle: 0, shine: 0,
     special: 0, eyePop: 1, sniff: 0, time: 0,
   };
 }
@@ -59,14 +61,17 @@ export interface Wear { head?: string; face?: string; neck?: string; }
 
 let OUT = 3.2;
 
-function blob(ctx: CanvasRenderingContext2D, cx: number, cy: number, rx: number, ry: number, rot: number, bumps: number, amp: number, phase = 0) {
+/** Stable pseudo-random 0..1 per index (tufts and jagged bumps must not flicker between frames). */
+const hash = (i: number) => { const x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+
+function blob(ctx: CanvasRenderingContext2D, cx: number, cy: number, rx: number, ry: number, rot: number, bumps: number, amp: number, phase = 0, jag = 0) {
   if (amp <= 0.001) { ellipse(ctx, cx, cy, rx, ry, rot); return; }
   ctx.beginPath();
   const n = bumps * 2;
   const c = Math.cos(rot), s = Math.sin(rot);
   for (let i = 0; i <= n; i++) {
     const a = (i / n) * Math.PI * 2 + phase;
-    const r = i % 2 === 0 ? 1 + amp : 1 - amp * 0.3;
+    const r = i % 2 === 0 ? 1 + amp * (1 + jag * (hash((i % n) + bumps) * 1.6 - 0.3)) : 1 - amp * 0.3;
     const lx = Math.cos(a) * rx * r, ly = Math.sin(a) * ry * r;
     const px = cx + lx * c - ly * s, py = cy + lx * s + ly * c;
     if (i === 0) ctx.moveTo(px, py);
@@ -86,6 +91,49 @@ function fillStroke(ctx: CanvasRenderingContext2D, fill: string | CanvasGradient
   ctx.strokeStyle = stroke;
   ctx.lineWidth = OUT;
   ctx.stroke();
+}
+
+/**
+ * Post-bath ruffled fur: little tufts sticking out at jaunty angles around an outline. Each tuft
+ * has its own "smoothness" threshold, so brushing flattens them one by one rather than all at once.
+ */
+function drawTufts(ctx: CanvasRenderingContext2D, cx: number, cy: number, rx: number, ry: number, rot: number, angles: number[], seed: number,
+  ruffle: number, size: number, fill: string, line: string, t: number) {
+  if (ruffle <= 0.01) return;
+  const c = Math.cos(rot), s = Math.sin(rot);
+  for (let i = 0; i < angles.length; i++) {
+    const h = hash(seed + i);
+    const k = clamp01((ruffle - h * 0.7) / 0.3); // this tuft's share of the mess
+    if (k <= 0.02) continue;
+    const a = angles[i];
+    const lx = Math.cos(a) * rx * 0.92, ly = Math.sin(a) * ry * 0.92;
+    const bx = cx + lx * c - ly * s, by = cy + lx * s + ly * c;
+    // pointing outward, but never quite straight (and swaying a touch)
+    const out = Math.atan2(Math.sin(a) / Math.max(1, ry), Math.cos(a) / Math.max(1, rx)) + rot; // the outline's outward normal
+    const ang = out + (h - 0.5) * 1.1 + Math.sin(t * 2.3 + i) * 0.05;
+    const len = size * (0.7 + h * 0.6) * k, w = size * 0.28 * (0.6 + 0.4 * k);
+    const nx = -Math.sin(ang), ny = Math.cos(ang), dx = Math.cos(ang), dy = Math.sin(ang);
+    ctx.beginPath();
+    ctx.moveTo(bx + nx * w, by + ny * w);
+    ctx.quadraticCurveTo(bx + dx * len * 0.55 + nx * w * 0.9, by + dy * len * 0.55 + ny * w * 0.9, bx + dx * len, by + dy * len);
+    ctx.quadraticCurveTo(bx + dx * len * 0.35 - nx * w * 0.3, by + dy * len * 0.35 - ny * w * 0.3, bx - nx * w, by - ny * w);
+    ctx.closePath();
+    ctx.fillStyle = fill; ctx.fill();
+    ctx.strokeStyle = line; ctx.lineWidth = OUT * 0.8; ctx.stroke();
+  }
+}
+
+/** Freshly groomed: a soft glossy highlight along the top of a shape. */
+function drawShine(ctx: CanvasRenderingContext2D, cx: number, cy: number, rx: number, ry: number, rot: number, shine: number) {
+  if (shine <= 0.02) return;
+  ctx.save();
+  ctx.translate(cx, cy); ctx.rotate(rot);
+  ctx.globalAlpha = Math.min(0.7, shine * 0.7);
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = Math.max(2, rx * 0.09); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.ellipse(0, 0, Math.max(1, rx * 0.72), Math.max(1, ry * 0.7), 0, Math.PI * 1.12, Math.PI * 1.42); ctx.stroke();
+  ctx.lineWidth = Math.max(1.5, rx * 0.05);
+  ctx.beginPath(); ctx.ellipse(0, 0, Math.max(1, rx * 0.72), Math.max(1, ry * 0.7), 0, Math.PI * 1.5, Math.PI * 1.58); ctx.stroke();
+  ctx.restore();
 }
 
 function rot(x: number, y: number, a: number): [number, number] {
@@ -110,7 +158,8 @@ export function drawPet(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, 
   const hf = clamp01(Math.max(p.headFront, f));
   const upside = p.belly > 0.5;
   const flip = Math.max(0.2, Math.abs(Math.cos(p.belly * Math.PI)));
-  const fluffAmp = (B.fluff * 0.07 + p.floof * 0.12) * (1 - p.wet * 0.8) + p.wet * 0.03;
+  const fluffAmp = (B.fluff * 0.07 + p.floof * 0.12 + p.ruffle * 0.05) * (1 - p.wet * 0.8) + p.wet * 0.03;
+  const jag = p.ruffle * (1 - p.wet);
   const bw = B.bw, bh = B.bh, R = B.R;
   const t = p.time;
 
@@ -178,14 +227,16 @@ export function drawPet(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, 
   }
 
   // ---------- body ----------
-  blob(ctx, bcx, bcy, brx, bry, brot, 9, fluffAmp, 0.3);
+  // post-bath tufts sit behind the outline so the body hides their roots
+  if (jag > 0.01) drawTufts(ctx, bcx, bcy, brx, bry, brot, [-2.9, -2.45, -2.0, -1.6, -1.15, -0.7, -0.3, 0.25, 2.8], 11, jag, bh * 0.55, main, line, t);
+  blob(ctx, bcx, bcy, brx, bry, brot, 9, fluffAmp, 0.3, jag);
   const grad = ctx.createLinearGradient(0, bcy - bry, 0, bcy + bry);
   grad.addColorStop(0, shade(main, 0.08));
   grad.addColorStop(1, shade(main, -0.1));
   fillStroke(ctx, grad, line);
   // belly patch & markings (clipped)
   ctx.save();
-  blob(ctx, bcx, bcy, brx, bry, brot, 9, fluffAmp, 0.3);
+  blob(ctx, bcx, bcy, brx, bry, brot, 9, fluffAmp, 0.3, jag);
   ctx.clip();
   if (upside) {
     ellipse(ctx, bcx, bcy - bry * 0.35, brx * 0.72, bry * 0.7, brot);
@@ -208,6 +259,7 @@ export function drawPet(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, 
   }
   if (p.dirt > 0.05) drawDirt(ctx, bcx, bcy, brx, bry, p.dirt);
   ctx.restore();
+  drawShine(ctx, bcx, bcy, brx, bry, brot, p.shine);
 
   // haunches (sitting)
   if (p.sit > 0.05 && !upside) {
@@ -608,13 +660,19 @@ function drawHead(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, pal: P
     }
   }
 
-  // head shape
+  // head shape (after a bath: wild tufts all round, and a cowlick on top)
   const headFluff = fluffAmp * 0.8;
-  blob(ctx, 0, 0, R * (1 + p.cheekPuff * 0.05), R * 0.94, 0, 11, headFluff, 0.2);
+  const hjag = p.ruffle * (1 - p.wet);
+  if (hjag > 0.01) {
+    drawTufts(ctx, 0, 0, R, R * 0.94, 0, [-2.6, -2.1, -1.35, -1.05, -0.5, 0.15, 2.55, 3.05], 31, hjag, R * 0.42, main, line, p.time);
+    drawTufts(ctx, faceX * 0.3, -R * 0.1, R * 0.35, R * 0.9, 0, [-1.75, -1.57, -1.4], 51, Math.min(1, hjag * 1.25), R * 0.36, main, line, p.time);
+  }
+  blob(ctx, 0, 0, R * (1 + p.cheekPuff * 0.05), R * 0.94, 0, 11, headFluff, 0.2, hjag);
   const g = ctx.createRadialGradient(-R * 0.3, -R * 0.4, R * 0.2, 0, 0, R * 1.1);
   g.addColorStop(0, shade(main, 0.12));
   g.addColorStop(1, shade(main, -0.06));
   fillStroke(ctx, g, line);
+  drawShine(ctx, 0, 0, R, R * 0.94, 0, p.shine);
   // cheek fluff for fluffy body
   if (ap.body === 'fluffy' || p.floof > 0.2) {
     ctx.fillStyle = main;
@@ -631,7 +689,7 @@ function drawHead(ctx: CanvasRenderingContext2D, p: Pose, ap: Appearance, pal: P
   const farS = lerp(0.8, 1, hf);
   if (ap.marking === 'patch') {
     ctx.save();
-    blob(ctx, 0, 0, R, R * 0.94, 0, 11, headFluff, 0.2); ctx.clip();
+    blob(ctx, 0, 0, R, R * 0.94, 0, 11, headFluff, 0.2, hjag); ctx.clip();
     ellipse(ctx, nearX + R * 0.06, eyeY - R * 0.05, R * 0.38, R * 0.34, 0.3);
     ctx.fillStyle = dark; ctx.fill();
     ctx.restore();

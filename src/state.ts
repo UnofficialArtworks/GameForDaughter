@@ -199,6 +199,7 @@ export function loadSave(storage: Pick<Storage, 'getItem'> = localStorage): Save
   }
 }
 
+/** Old single-pet format (kept for tests and as the migration source; the game writes the v2 store). */
 export function writeSave(save: SaveData, storage: Pick<Storage, 'setItem'> = localStorage) {
   try {
     save.lastSeen = Date.now();
@@ -209,8 +210,194 @@ export function writeSave(save: SaveData, storage: Pick<Storage, 'setItem'> = lo
   }
 }
 
-export function clearSave(storage: Pick<Storage, 'removeItem'> = localStorage) {
-  try { storage.removeItem(SAVE_KEY); } catch { /* ignore */ }
+
+// ---------- Several Fuzzlets (save format v2) ----------
+//
+// One container holds up to MAX_PETS pets, each with its own complete SaveData (memories,
+// friendship, twinkles, room, habits, walks, keepsakes, achievements…). Settings are global.
+// The old single-pet save (SAVE_KEY) is read once to migrate and is never modified or removed,
+// so it stays on the device as a backup of the original pet.
+//
+// Safety rules (enforced here, tested in tests/pets.test.ts):
+// - adding a pet never replaces or touches another one, and fails when the home is full;
+// - only removePet() deletes a pet, and only the one asked for;
+// - a store that can't be read is set aside under a separate key, never overwritten.
+export const STORE_KEY = 'fuzzlet.save.v2';
+export const STORE_VERSION = 2;
+export const MAX_PETS = 3;
+
+export interface SaveStore {
+  version: number;
+  activePetId: string | null;
+  /** Pet ids in the order they came home (slot order). */
+  order: string[];
+  pets: Record<string, SaveData>;
+  /** Global settings: volume, motion, contrast, text size. */
+  settings: Settings;
+  /** Id the old single-pet save was given when it was migrated (if any). */
+  legacyId?: string;
+}
+
+export function emptyStore(settings: Settings = defaultSettings()): SaveStore {
+  return { version: STORE_VERSION, activePetId: null, order: [], pets: {}, settings };
+}
+
+export function newPetId(taken: Iterable<string> = []): string {
+  const used = new Set(taken);
+  for (let i = 0; i < 100; i++) {
+    const id = 'pet-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
+    if (!used.has(id)) return id;
+  }
+  return 'pet-' + Math.random().toString(36).slice(2);
+}
+
+/** Wrap an old single-pet save (already migrated) as slot 1 of a new store. */
+export function storeFromLegacy(save: SaveData): SaveStore {
+  const id = 'pet-1';
+  const settings = deepFill(save.settings, defaultSettings()) as Settings;
+  const store: SaveStore = { version: STORE_VERSION, activePetId: id, order: [id], pets: { [id]: save }, settings, legacyId: id };
+  save.settings = settings;
+  return store;
+}
+
+/** Validate and upgrade a parsed store. Pets that can't be read are dropped from this copy only. */
+export function migrateStore(raw: any): SaveStore | null {
+  if (!raw || typeof raw !== 'object' || typeof raw.pets !== 'object' || raw.pets === null) return null;
+  const settings = deepFill(raw.settings ?? {}, defaultSettings()) as Settings;
+  const pets: Record<string, SaveData> = {};
+  const order: string[] = [];
+  const ids: string[] = Array.isArray(raw.order) ? raw.order.filter((x: unknown) => typeof x === 'string') : [];
+  for (const id of Object.keys(raw.pets)) if (!ids.includes(id)) ids.push(id);
+  for (const id of ids) {
+    if (order.includes(id)) continue; // (never drop a pet, even past the limit: nothing is lost)
+    const pet = migrate(raw.pets[id]);
+    if (!pet) continue;
+    pet.settings = settings;
+    pets[id] = pet;
+    order.push(id);
+  }
+  const activePetId = typeof raw.activePetId === 'string' && pets[raw.activePetId] ? raw.activePetId : order[0] ?? null;
+  return { version: STORE_VERSION, activePetId, order, pets, settings, legacyId: typeof raw.legacyId === 'string' ? raw.legacyId : undefined };
+}
+
+type Store = Pick<Storage, 'getItem' | 'setItem'>;
+
+/** The stored pets as they are right now, or null if there's nothing readable (no side effects). */
+export function readStore(storage: Pick<Storage, 'getItem'> = localStorage): SaveStore | null {
+  try { const txt = storage.getItem(STORE_KEY); return txt ? migrateStore(JSON.parse(txt)) : null; } catch { return null; }
+}
+
+/**
+ * Load all pets. Order of preference: the v2 store; else the old single-pet save, migrated into
+ * slot 1 (and written as v2 straight away; the old key is left untouched); else an empty store.
+ */
+export function loadStore(storage: Store = localStorage): { store: SaveStore; migrated: boolean; problem?: string } {
+  let problem: string | undefined;
+  let txt: string | null = null;
+  try { txt = storage.getItem(STORE_KEY); } catch { problem = 'storage unavailable'; }
+  if (txt) {
+    try {
+      const st = migrateStore(JSON.parse(txt));
+      if (st) return { store: st, migrated: false };
+      problem = 'unreadable pet store';
+    } catch { problem = 'unreadable pet store'; }
+    // keep the unreadable data safe under another key instead of ever overwriting it
+    try { storage.setItem(`${STORE_KEY}.unreadable-${Date.now()}`, txt); } catch { /* ignore */ }
+  }
+  const legacy = loadSave(storage);
+  if (legacy) {
+    const store = storeFromLegacy(legacy);
+    writeStore(store, storage);
+    return { store, migrated: true, problem };
+  }
+  return { store: emptyStore(), migrated: false, problem };
+}
+
+export function writeStore(store: SaveStore, storage: Pick<Storage, 'setItem'> = localStorage): boolean {
+  try {
+    // settings are stored once, globally (each pet's `settings` is the same shared object)
+    storage.setItem(STORE_KEY, JSON.stringify(store, function (this: unknown, k, v) { return k === 'settings' && this !== store ? undefined : v; }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read-modify-write: apply a change to the pets as they are stored *right now*, then write. A save
+ * therefore only ever changes what it means to change — it can never undo a pet adopted, played
+ * or removed somewhere else (e.g. the game open in a second browser tab). `fallback` is used when
+ * nothing readable is stored yet. Returns the store as written (the caller keeps it).
+ */
+export function updateStore(mutate: (st: SaveStore) => void, fallback: SaveStore, storage: Store = localStorage): { store: SaveStore; ok: boolean } {
+  let base: SaveStore | null = null;
+  try {
+    const txt = storage.getItem(STORE_KEY);
+    if (txt) {
+      try { base = migrateStore(JSON.parse(txt)); } catch { base = null; }
+      if (!base) { try { storage.setItem(`${STORE_KEY}.unreadable-${Date.now()}`, txt); } catch { /* ignore */ } }
+    }
+  } catch { /* storage unavailable: work in memory */ }
+  const st = base ?? fallback;
+  if (base) base.settings = fallback.settings; // settings changed here win (they're global and small)
+  for (const id of st.order) st.pets[id].settings = st.settings;
+  mutate(st);
+  return { store: st, ok: writeStore(st, storage) };
+}
+
+export const canAddPet = (store: SaveStore) => store.order.length < MAX_PETS;
+
+/** Add a newly adopted pet in a free slot and make it the active one. Never replaces anyone. */
+export function addPet(store: SaveStore, save: SaveData): string | null {
+  if (!canAddPet(store)) return null;
+  const id = newPetId(store.order);
+  save.settings = store.settings;
+  store.pets[id] = save;
+  store.order.push(id);
+  store.activePetId = id;
+  return id;
+}
+
+/** Permanently remove one pet (the UI asks for a deliberate, held confirmation first). */
+export function removePet(store: SaveStore, id: string): boolean {
+  if (!store.pets[id]) return false;
+  delete store.pets[id];
+  store.order = store.order.filter((x) => x !== id);
+  if (store.activePetId === id) store.activePetId = store.order[0] ?? null;
+  return true;
+}
+
+export function setActivePet(store: SaveStore, id: string): SaveData | null {
+  const pet = store.pets[id];
+  if (!pet) return null;
+  store.activePetId = id;
+  pet.settings = store.settings;
+  return pet;
+}
+
+export function activePet(store: SaveStore): SaveData | null {
+  return store.activePetId ? store.pets[store.activePetId] ?? null : null;
+}
+
+/**
+ * Deliberate, press-and-hold confirmation (for removing a pet). Letting go early resets it;
+ * a tap can never complete it. Pure state so it can be tested without a DOM.
+ */
+export class HoldConfirm {
+  held = 0;
+  holding = false;
+  done = false;
+  constructor(public need = 2) {}
+  press() { if (!this.done) this.holding = true; }
+  release() { this.holding = false; if (!this.done) this.held = 0; }
+  /** Advance time; returns true exactly once, when the hold completes. */
+  update(dt: number): boolean {
+    if (this.done || !this.holding) return false;
+    this.held += Math.min(dt, 0.1); // a stalled frame can't skip the wait
+    if (this.held >= this.need) { this.done = true; this.holding = false; return true; }
+    return false;
+  }
+  get progress() { return this.done ? 1 : Math.min(1, this.held / this.need); }
 }
 
 export function friendshipLevel(xp: number, levels: { xp: number }[]) {

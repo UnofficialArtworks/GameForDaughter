@@ -53,8 +53,19 @@ export class Walk {
   goOn = false;
   homeNow = false;
   allowTouch = false;
+  /** Where the walk is being shown: the park, or back in the room for the homecoming. */
+  scene: 'park' | 'home' = 'park';
   private flow: Generator<void, void, void> | null = null;
   private fade = 0;
+  /** Seconds since the Home button was pressed (the flow must get going home promptly). */
+  private homeT = 0;
+  /** Seconds the flow has been waiting on something the pet is doing that isn't part of the walk. */
+  private foreignT = 0;
+  /** Travel legs in a row where the pet didn't get anywhere. */
+  private stuckLegs = 0;
+  private pokesThisLeg = 0;
+  private finished = false;
+  private walkT = 0;
   private poke: { x: number; y: number; kind: string } | null = null;
   private pokeFinds = 0;
   private throwAt: number | null = null;
@@ -79,6 +90,9 @@ export class Walk {
   private cur() { return this.stops[this.idx]; }
 
   canStart() { return this.g.friendLevel >= 1; }
+  get hasFlow() { return !!this.flow; }
+  get fadeLevel() { return this.fade; }
+  clearFade() { this.fade = 0; }
 
   // ---------- lifecycle ----------
   start() {
@@ -88,6 +102,7 @@ export class Walk {
     if (g.mode !== 'free') return;
     g.ui.closeTray();
     g.toys.clear();
+    g.input.cancelAll('walk start');
     g.brain.fulfil('walk');
     const w = this.mem, tr = this.tr;
     this.night = g.world.isNight(); this.eve = g.world.isEvening();
@@ -97,6 +112,7 @@ export class Walk {
     this.leaves = []; this.flies = []; this.squirrel = null; this.owl = 0; this.focus = null;
     this.surprised = false; this.tiredDone = false; this.throwReady = false; this.throwAt = null;
     this.choice = null; this.chosen = null;
+    this.scene = 'park'; this.fade = 0; this.homeT = 0; this.foreignT = 0; this.stuckLegs = 0; this.pokesThisLeg = 0; this.finished = false; this.walkT = 0;
     // plan: two stops, a fork (the player picks a path), then two or three more
     const first = pickKinds(2, tr, w, this.night, [], Math.random);
     this.stops = first.map((k, i) => this.mkStop(k, i, null));
@@ -106,6 +122,7 @@ export class Walk {
     g.mode = 'walk';
     g.pet.hatLeaf = 0; g.pet.nosePetal = 0; g.pet.heldScale = 1;
     this.flow = this.flowGen();
+    g.diag.log('walk', 'start');
     g.ui.refresh();
   }
 
@@ -138,7 +155,16 @@ export class Walk {
   update(dt: number) {
     if (!this.active) return;
     const g = this.g;
-    if (this.flow) { const r = this.flow.next(); if (r.done) { this.flow = null; this.active = false; } }
+    this.walkT += dt;
+    if (this.flow) {
+      let r: IteratorResult<void, void>;
+      try { r = this.flow.next(); } catch (e) { g.diag.error('walk flow', e); this.abort('error in the walk'); return; }
+      if (r.done) { this.flow = null; this.active = false; if (g.mode === 'walk') this.abort('walk ended without finishing'); }
+    }
+    if (!this.active) return;
+    // safety nets (legitimate walks never trip these)
+    if (this.homeNow && this.phase !== 'home') { this.homeT += dt; if (this.homeT > 10) { g.diag.watchdog('Home pressed but the walk did not head home'); this.abort('home stalled'); return; } }
+    if (this.walkT > 20 * 60) { g.diag.watchdog('walk ran for 20 minutes'); this.abort('too long'); return; }
     // particles & critters
     for (const l of this.leaves) {
       if (l.z > 0 || l.vz > 0) { l.vz -= 420 * dt; l.z += l.vz * dt; l.x += l.vx * dt + Math.sin(l.rot * 2) * 20 * dt; l.rot += l.vr * dt; if (l.z <= 0) { l.z = 0; l.vz = 0; l.vx = 0; } }
@@ -160,7 +186,7 @@ export class Walk {
     this.owl = Math.max(0, this.owl - dt);
     for (const s of this.stops) s.t = Math.max(0, s.t - dt);
     // ambience
-    if (g.mode === 'walk') {
+    if (g.mode === 'walk' && this.scene === 'park') {
       this.sfxT -= dt;
       if (this.sfxT <= 0) {
         this.sfxT = rand(2.5, 6);
@@ -183,7 +209,7 @@ export class Walk {
   // ---------- input ----------
   onDown(wx: number, wy: number): boolean {
     const g = this.g, pet = g.pet;
-    if (this.phase === 'out' || this.phase === 'home') return true;
+    if (this.phase === 'out' || this.phase === 'home' || this.homeNow) { if (pet.hitZone(wx, wy, 1.15)) pet.emote('heart', 1); return true; }
     if (this.throwReady) { this.throwAt = wx; return true; }
     if (pet.hitZone(wx, wy, 1.15)) {
       if (this.phase === 'wait' || this.allowTouch) return false; // normal petting & taps
@@ -214,11 +240,19 @@ export class Walk {
   /** "Keep walking" button / auto-continue. */
   next() { if (this.phase === 'wait') this.goOn = true; }
   pick(i: 0 | 1) { if (this.phase === 'choice' && this.choice && !this.chosen) { this.chosen = this.choice[i]; this.g.audio.click(); } }
-  goHomeNow() { this.homeNow = true; this.goOn = true; if (this.phase === 'choice' && this.choice && !this.chosen) this.chosen = this.choice[0]; }
+  /** The Home button: always works, from any phase. */
+  goHomeNow() {
+    if (!this.active || this.homeNow) return;
+    this.homeNow = true; this.goOn = true; this.homeT = 0;
+    this.throwReady = false; this.allowTouch = false; this.tip = '';
+    if (this.phase === 'choice' && this.choice && !this.chosen) this.chosen = this.choice[0];
+    this.g.diag.log('walk', `Home pressed (${this.phase})`);
+    this.g.ui.refresh();
+  }
 
   // ---------- flow ----------
   private *flowGen(): Generator<void, void, void> {
-    yield* this.leaveHome();
+    if (!(yield* this.leaveHome())) return;
     for (let i = 0; i < this.stops.length; i++) {
       if (this.homeNow) break;
       this.idx = i;
@@ -228,8 +262,9 @@ export class Walk {
       this.setPhase('event');
       this.joyV = 0.5;
       yield* this.doPet(this.event(this.stops[i]));
-      this.allowTouch = false;
+      this.allowTouch = false; this.throwReady = false;
       this.focus = null;
+      if (this.homeNow) break;
       const st = this.stops[i];
       for (const e of this.story) if (e.w < 0) e.w = this.joyV + (this.found.length ? 0.1 : 0);
       if (recordStop(this.mem, st.kind, this.joyV)) {
@@ -243,15 +278,32 @@ export class Walk {
     yield* this.goHome();
   }
 
-  private setPhase(p: WalkPhase) { this.phase = p; this.g.ui.refresh(); }
+  private setPhase(p: WalkPhase) {
+    if (p !== this.phase) this.g.diag.log('walk', `phase ${p} (stop ${this.idx + 1}/${this.stops.length})`);
+    this.phase = p; this.tip = ''; this.allowTouch = false; this.pokesThisLeg = 0;
+    this.g.ui.refresh();
+  }
 
-  /** Run a pet script; if petting or a tap interrupts it, let that finish and carry on. */
+  /**
+   * Run a pet script and wait for it. If petting or a tap interrupts it, let that finish and carry
+   * on. Pressing Home abandons the script (except on the way home). Anything else holding on to
+   * the pet for a long time is stopped, so the walk can never wait forever.
+   */
   private *doPet(gen: Gen, pri = 3): Generator<void, void, void> {
     const pet = this.g.pet;
     pet.run(gen, 'walk', pri);
     const a = pet.action;
-    while (a && pet.action === a) yield;
-    while (pet.action && pet.actionName !== 'walk') yield;
+    this.foreignT = 0;
+    while (true) {
+      if (this.homeNow && this.phase !== 'home') return;
+      if (a && pet.action === a) { yield; continue; }
+      if (pet.action && pet.actionName !== 'walk') {
+        this.foreignT += pet.dt;
+        if (this.foreignT > 20) { this.g.diag.watchdog(`walk waited 20s on "${pet.actionName}"`); pet.stop(); this.foreignT = 0; }
+        yield; continue;
+      }
+      return;
+    }
   }
 
   private *fadeTo(v: number, s = 0.45): Generator<void, void, void> {
@@ -264,7 +316,7 @@ export class Walk {
 
   private snapCam() { const g = this.g; g.cam.x = g.camT.x = this.camX(); g.cam.y = g.camT.y = g.freeCamY(); g.cam.zoom = g.camT.zoom = 1; }
 
-  private *leaveHome(): Generator<void, void, void> {
+  private *leaveHome(): Generator<void, boolean, void> {
     const g = this.g, pet = g.pet, b = g.brain;
     const knows = b.habit('walkies') > 0.3 || this.mem.walks >= 3;
     const self = this;
@@ -280,6 +332,7 @@ export class Walk {
       } else yield* wait(pet, 0.4);
       void self;
     })(), 3);
+    if (this.homeNow) { this.callOff(); return false; } // Home before we even left: never mind!
     yield* this.fadeTo(1);
     pet.stop(); pet.o = {}; pet.lookAt = null; pet.held = null;
     pet.x = PARK0 + 70; pet.y = PATH_Y; pet.z = 0; pet.face(1); pet.body = 'stand';
@@ -296,6 +349,7 @@ export class Walk {
       yield* wait(pet, 0.7);
       pet.lookCam = 0; pet.o = {};
     })());
+    return true;
   }
 
   // ---------- travelling between stops ----------
@@ -308,9 +362,18 @@ export class Walk {
     pet.body = 'stand'; pet.expr = null; pet.o = {};
     while (pet.x < noticeAt - 6) {
       if (this.homeNow) return;
-      if (this.poke) { yield* this.pokeGen(); continue; }
+      if (this.poke) {
+        // it happily checks out what you point at (but not forever: the walk goes on)
+        if (++this.pokesThisLeg <= 4) { yield* this.pokeGen(); continue; }
+        this.poke = null;
+      }
       const seg = Math.min(noticeAt, pet.x + rand(150, 260));
+      const x0 = pet.x;
       yield* walk(pet, seg, PATH_Y + rand(-22, 22), speed, 8);
+      // safety net: the pet should always make progress along the path
+      if (pet.x - x0 < 8) {
+        if (++this.stuckLegs >= 3) { g.diag.watchdog('pet could not move along the path'); pet.carried = false; pet.x = Math.min(noticeAt, pet.x + 220); this.stuckLegs = 0; }
+      } else this.stuckLegs = 0;
       if (pet.x >= noticeAt - 6) break;
       // little personality flourishes along the way
       if (!this.surprised && chance(0.16)) { this.surprised = true; yield* this.surprise(); continue; }
@@ -940,6 +1003,7 @@ export class Walk {
     const self = this;
     this.setPhase('travel');
     yield* this.doPet((function* (): Gen { pet.o = {}; yield* walk(pet, self.forkX - 70, PATH_Y + 10, 150, 6); })());
+    if (this.homeNow) return;
     this.focus = { x: this.forkX, y: 500 };
     this.setPhase('choice');
     const idle = function* (): Gen {
@@ -958,12 +1022,13 @@ export class Walk {
     };
     pet.run(idle(), 'walk', 2);
     let t = 0;
-    while (!this.chosen) {
+    while (!this.chosen && !this.homeNow) {
       t += pet.dt;
       if (!pet.action) pet.run(idle(), 'walk', 2);
       if (t > 25) { this.chosen = this.choice[this.prefer]; g.toast('walk', `${this.name} picked the ${PATHS[this.chosen].name}!`, 'walk'); }
       yield;
     }
+    if (this.homeNow || !this.chosen) return;
     const chosen = this.chosen;
     const happy = chosen === this.choice[this.prefer];
     // lay out what's down that path
@@ -1030,8 +1095,8 @@ export class Walk {
       yield* walk(pet, pet.x - 120, PATH_Y, 150, 2);
     })());
     yield* this.fadeTo(1);
-    // back home
-    g.mode = 'free';
+    // back home (still a walk until the homecoming is over: no other activity can start mid-way)
+    this.scene = 'home';
     g.zone = 'room';
     g.world.cacheKey = '';
     pet.stop(); pet.o = {}; pet.lookAt = null;
@@ -1083,8 +1148,49 @@ export class Walk {
     g.brain.idle = 1.5;
   }
 
+  /** Put everything the walk touched back to normal (used by every way a walk can end). */
+  private endWalk() {
+    const g = this.g, pet = g.pet;
+    this.flow = null; this.active = false;
+    this.scene = 'park'; this.fade = 0; this.focus = null; this.poke = null; this.tip = '';
+    this.throwReady = false; this.throwAt = null; this.allowTouch = false; this.goOn = false; this.homeNow = false;
+    this.leaves = []; this.flies = []; this.squirrel = null; this.owl = 0;
+    pet.heldScale = 1; pet.nosePetal = 0;
+    g.input.cancelAll('walk end');
+    if (g.mode === 'walk') g.mode = 'free';
+    g.diag.log('walk', 'end');
+    g.ui.refresh();
+  }
+
+  /** Home was pressed before leaving the garden: no walk after all. */
+  private callOff() {
+    const pet = this.g.pet;
+    this.endWalk();
+    pet.stop(); pet.o = {}; pet.lookAt = null; pet.body = 'sit'; pet.lookCam = 1; pet.expr = 'happy';
+  }
+
+  /**
+   * Emergency exit, used only when something went wrong (an error, or the walk stopped making
+   * progress): bring the pet straight home and make sure every control works again. Whatever
+   * happened on the walk so far is still kept.
+   */
+  abort(reason: string) {
+    const g = this.g, pet = g.pet;
+    g.diag.watchdog(`walk aborted: ${reason}`);
+    const hadStops = this.story.length > 0 && !this.finished;
+    pet.stop(); pet.carried = false; pet.o = {}; pet.lookAt = null; pet.held = null; pet.hatLeaf = 0;
+    pet.x = 800; pet.y = 600; pet.z = 0; pet.vz = 0; pet.body = 'sit'; pet.face(-1);
+    g.zone = 'room'; g.world.cacheKey = '';
+    g.cam.x = g.camT.x = 900; g.cam.y = g.camT.y = g.freeCamY(); g.cam.zoom = g.camT.zoom = 1;
+    this.endWalk();
+    if (hadStops) { try { this.finish(false, this.muddy); } catch (e) { g.diag.error('walk finish', e); } }
+  }
+
   private finish(tired: boolean, dirty: boolean) {
     const g = this.g, s = g.save, m = s.memory;
+    if (this.finished) return;
+    this.finished = true;
+    if (g.mode === 'walk' || this.active) this.endWalk();
     const first = this.mem.walks === 0;
     this.mem.walks++;
     const n = s.pet.needs;

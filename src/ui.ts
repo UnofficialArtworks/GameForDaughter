@@ -1,7 +1,7 @@
 // DOM user interface: title & adoption, HUD, trays, journal, shop, settings, toasts.
 import type { Game } from './game';
 import { iconURL } from './art';
-import { newSave, randomAppearance, loadSave, clearSave, writeSave, Appearance, TraitId, SaveData } from './state';
+import { newSave, randomAppearance, updateStore, readStore, activePet, setActivePet, addPet, removePet, canAddPet, friendshipLevel, HoldConfirm, MAX_PETS, Appearance, TraitId, SaveData } from './state';
 import { PATHS, SPOT_TEXT, type WalkKind } from './walkmem';
 import { KEEPSAKES, collectDef } from './data';
 const PATHS_ICON: Record<string, string> = { flowers: 'path_flowers', puddle: 'path_pond', leaves: 'c:mapleleaf', butterfly: 'path_flowers', bush: 'path_woods', bench: 'walk', sound: 'path_woods', dig: 'dig', stick: 'c:twig', picnic: 'path_meadow' };
@@ -82,47 +82,165 @@ export class UI {
     return this.area;
   }
 
-  // ---------- title ----------
+  // ---------- title: every Fuzzlet on this device ----------
+  /**
+   * The front door. Shows each Fuzzlet (portrait, name, friendship, when they came home) with a
+   * big Play button, room for a new one (up to three), and a quiet "Pet options" link — the only
+   * way to a remove button. Also used to switch pets mid-game (no page reload).
+   */
   showTitle() {
     const g = this.g;
+    g.persist();
+    g.input.cancelAll('title screen');
     g.mode = 'title';
+    this.adoptStep = null;
     this.clearHud();
-    const save = loadSave();
-    this.titleShowsPet = !!save;
-    if (save) { g.load(save); g.pet.x = 480; g.pet.y = 600; g.pet.body = 'sit'; g.pet.lookCam = 1; }
-    const card = h('div', { class: 'title-card' },
-      h('div', { class: 'logo' }, h('span', { class: 'logo-my' }, 'My'), ' Fuzzlet'),
-      h('p', { class: 'tagline' }, save ? `${save.pet.name} is waiting for you!` : 'A tiny magical friend who is SO happy you\'re here.'),
-      h('div', { class: 'title-btns' },
-        save ? h('button', { class: 'btn big primary', onclick: () => this.continueGame() }, img('heart'), 'Continue') : null,
-        h('button', { class: 'btn big ' + (save ? '' : 'primary'), onclick: () => save ? this.confirmNew(save) : this.startAdopt() }, img('paw'), save ? 'New Pet' : 'Meet Your Pet'),
-        save ? h('button', { class: 'btn small', onclick: () => this.confirmReset(true) }, 'Reset Save') : null,
-      ),
-    );
+    this.hintEl.className = 'hint';
+    this.root.querySelectorAll('.banner, .splash').forEach((el) => el.remove());
+    g.store = readStore() ?? g.store; // as stored right now (the game may be open in another tab too)
+    const st = g.store;
+    const shown = activePet(st);
+    this.titleShowsPet = !!shown;
+    // the pet waits in the room, off to the side of the cards
+    if (shown) { g.load(shown); g.pet.x = st.order.length ? 830 : 480; g.pet.y = st.order.length ? 640 : 600; g.pet.body = 'sit'; g.pet.lookCam = 1; g.pet.face(-1); }
+    const card = h('div', { class: 'title-card' }, h('div', { class: 'logo' }, h('span', { class: 'logo-my' }, 'My'), ' Fuzzlet'));
+    if (!st.order.length) {
+      card.append(
+        h('p', { class: 'tagline' }, 'A tiny magical friend who is SO happy you\'re here.'),
+        h('div', { class: 'title-btns' }, h('button', { class: 'btn big primary', onclick: () => this.startAdopt() }, img('paw'), 'Meet Your Pet')),
+      );
+    } else {
+      card.append(h('p', { class: 'tagline' }, st.order.length > 1 ? 'Who wants to play?' : `${shown!.pet.name} is waiting for you!`));
+      const list = h('div', { class: 'pet-cards' });
+      for (const id of st.order) list.append(this.petCard(id));
+      if (canAddPet(st)) {
+        list.append(h('button', { class: 'pet-card new-pet', onclick: () => { g.audio.unlock(); g.audio.click(); this.askNewPet(); } },
+          h('span', { class: 'plus' }, '+'), h('b', {}, 'New Fuzzlet'), h('small', {}, `room for ${MAX_PETS - st.order.length} more`)));
+      }
+      const panel = h('div', { class: 'pets-panel' }, list);
+      if (!canAddPet(st)) panel.append(h('p', { class: 'full-note' }, `A full, happy home: ${MAX_PETS} Fuzzlets!`));
+      panel.append(h('button', { class: 'btn link', onclick: () => { g.audio.click(); this.openPetOptions(); } }, 'Pet options'));
+      card.append(panel);
+    }
     this.modalRoot.innerHTML = '';
-    const wrap = h('div', { class: 'title-screen' }, card);
-    this.modalRoot.append(wrap);
-    (card.querySelector('button') as HTMLButtonElement)?.focus();
+    this.modalRoot.append(h('div', { class: 'title-screen' }, card));
+    (card.querySelector('.pet-card .btn.primary, .btn.primary') as HTMLButtonElement | null)?.focus({ preventScroll: true });
   }
 
-  private continueGame() {
+  private petCard(id: string) {
+    const g = this.g, s = g.store.pets[id];
+    const lvl = friendshipLevel(s.pet.friendship, FRIEND_LEVELS);
+    const since = new Date(s.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    return h('div', { class: 'pet-card' + (id === g.store.activePetId ? ' last' : ''), role: 'group', 'aria-label': s.pet.name },
+      this.petPortrait(s, 104),
+      h('b', { class: 'pc-name' }, s.pet.name),
+      h('small', {}, `${FRIEND_LEVELS[lvl].name} · home since ${since}`),
+      h('button', { class: 'btn primary', 'aria-label': `Play with ${s.pet.name}`, onclick: () => this.playPet(id) }, img('heart', 'ic small'), 'Play'),
+    );
+  }
+
+  /** A little painted portrait of a pet (title cards, pet options, the Memory Book). */
+  petPortrait(s: SaveData, size = 120, cls = 'portrait-mini') {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const px = Math.round(size * dpr);
+    const cv = h('canvas', { width: String(px), height: String(px), class: cls, style: `width:${size}px;height:${size}px`, 'aria-hidden': 'true' }) as HTMLCanvasElement;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return cv; // (a device out of canvas memory just shows no picture)
+    ctx.scale(px / 240, px / 240);
+    ctx.translate(120, 226); ctx.scale(1.22, 1.22);
+    const p = defaultPose(); p.sit = 1; p.front = 1; p.smile = 1; p.blush = 0.7; p.eyeHappy = 1; p.tailUp = 0.8; p.time = 1; p.tailPhase = 1;
+    try { drawPet(ctx, p, s.pet.appearance, s.equipped.wear, newRig()); } catch (e) { this.g.diag.error('portrait', e); }
+    return cv;
+  }
+
+  /** Play with a pet: it becomes the active one; the one before was saved when the title opened. */
+  private playPet(id: string) {
     const g = this.g;
     g.audio.unlock();
+    g.store = updateStore((st) => { setActivePet(st, id); }, g.store).store;
+    const save = setActivePet(g.store, id);
+    if (!save) { this.showTitle(); return; }
+    g.load(save);
     this.modalRoot.innerHTML = '';
+    g.diag.log('pets', `play ${save.pet.name}`);
     g.startSession(true);
   }
 
-  private confirmNew(save: SaveData) {
-    this.confirm(`Adopt a new pet? This will replace ${save.pet.name} and all their memories.`, 'Yes, new pet', () => { clearSave(); this.startAdopt(); });
+  /** "New Fuzzlet": say clearly what happens — nobody is replaced. */
+  private askNewPet() {
+    const g = this.g, st = g.store;
+    if (!canAddPet(st)) { this.toast(`Your home is full — ${MAX_PETS} Fuzzlets already!`, 'heart'); return; }
+    const names = st.order.map((id) => st.pets[id].pet.name);
+    if (!names.length) { this.startAdopt(); return; }
+    const safe = names.length === 1 ? `${names[0]} will stay safe.` : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} will stay safe.`;
+    const box = h('div', { class: 'modal small', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Adopt another Fuzzlet?' },
+      h('h2', {}, 'Adopt another Fuzzlet?'),
+      h('p', { class: 'confirm-text' }, `You can have up to ${MAX_PETS} Fuzzlets. ${safe}`),
+    );
+    const no = h('button', { class: 'btn', onclick: () => this.closeModal(box) }, 'Not now');
+    const yes = h('button', { class: 'btn primary', onclick: () => { this.closeModal(box); this.startAdopt(); } }, img('paw', 'ic small'), 'Yes, adopt!');
+    box.append(h('div', { class: 'row' }, no, yes));
+    this.openModal(box);
+    (yes as HTMLButtonElement).focus();
   }
 
-  confirmReset(fromTitle: boolean) {
-    this.confirm('Erase your pet and ALL progress forever? This cannot be undone.', 'Erase everything', () => {
-      clearSave();
-      this.g.toys.clear();
+  /** Grown-up corner: the only way to remove a Fuzzlet, deliberately out of the way. */
+  private openPetOptions() {
+    const g = this.g, st = g.store;
+    const body = h('div', { class: 'pet-options' },
+      h('p', { class: 'panel-tip' }, 'For grown-ups. Removing a Fuzzlet deletes it and all of its memories forever.'));
+    for (const id of st.order) {
+      const s = st.pets[id];
+      body.append(h('div', { class: 'opt-pet' }, this.petPortrait(s, 56), h('b', {}, s.pet.name),
+        h('button', { class: 'btn small quiet', onclick: () => this.confirmRemove(id) }, 'Remove…')));
+    }
+    this.openModal(this.modalShell('Pet options', body));
+  }
+
+  /** Removing a pet: plain words, the pet's face, and a button that must be HELD for 2 seconds. */
+  private confirmRemove(id: string) {
+    const g = this.g, s = g.store.pets[id];
+    if (!s) return;
+    const n = s.pet.name;
+    const hold = new HoldConfirm(2);
+    const fill = h('i', { class: 'hold-fill' });
+    const label = h('span', {}, `Hold to remove ${n}`);
+    const holdBtn = h('button', { class: 'btn danger hold-btn', 'aria-label': `Press and hold for two seconds to remove ${n}` }, fill, label) as HTMLButtonElement;
+    const box = h('div', { class: 'modal small remove-box', role: 'alertdialog', 'aria-modal': 'true', 'aria-label': `Remove ${n}?` },
+      this.petPortrait(s, 96),
+      h('h2', {}, `Remove ${n}?`),
+      h('p', { class: 'confirm-text' }, `This will permanently remove ${n} and all of ${n}'s memories.`),
+      h('p', { class: 'panel-tip' }, 'This can\'t be undone. To remove, press and hold the red button.'),
+    );
+    const keep = h('button', { class: 'btn primary', onclick: () => this.closeModal(box) }, `Keep ${n}`) as HTMLButtonElement;
+    box.append(h('div', { class: 'row' }, keep, holdBtn));
+    let raf = 0, last = 0;
+    const tick = (now: number) => {
+      const dt = last ? (now - last) / 1000 : 0; last = now;
+      if (hold.update(dt)) { remove(); return; }
+      fill.style.width = `${hold.progress * 100}%`;
+      if (hold.holding && box.isConnected) raf = requestAnimationFrame(tick);
+    };
+    const press = (e: Event) => { e.preventDefault(); if (hold.done) return; hold.press(); last = 0; cancelAnimationFrame(raf); raf = requestAnimationFrame(tick); label.textContent = `Keep holding…`; };
+    const release = () => { if (hold.done) return; hold.release(); cancelAnimationFrame(raf); fill.style.width = '0%'; label.textContent = `Hold to remove ${n}`; };
+    holdBtn.addEventListener('pointerdown', press);
+    for (const ev of ['pointerup', 'pointerleave', 'pointercancel', 'blur']) holdBtn.addEventListener(ev, release);
+    holdBtn.addEventListener('keydown', (e) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) press(e); });
+    holdBtn.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') release(); });
+    holdBtn.addEventListener('click', (e) => e.preventDefault()); // a click on its own never removes anyone
+    holdBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+    const remove = () => {
+      fill.style.width = '100%';
+      let removed = false;
+      g.store = updateStore((st) => { removed = removePet(st, id); }, g.store).store;
+      if (!removed) { this.showTitle(); return; }
+      g.diag.log('pets', `removed ${n}`);
+      this.modalRoot.querySelectorAll('.backdrop').forEach((b) => b.remove());
       this.showTitle();
-    }, true);
-    void fromTitle;
+      this.toast(`${n} was removed.`, 'heart');
+    };
+    this.openModal(box);
+    keep.focus();
   }
 
   confirm(text: string, yes: string, onYes: () => void, danger = false) {
@@ -131,27 +249,28 @@ export class UI {
     );
     const yesBtn = h('button', { class: 'btn ' + (danger ? 'danger' : 'primary'), onclick: () => { this.closeModal(box); onYes(); } }, yes) as HTMLButtonElement;
     const noBtn = h('button', { class: 'btn', onclick: () => this.closeModal(box) }, 'Keep my pet') as HTMLButtonElement;
-    if (danger) {
-      yesBtn.disabled = true;
-      let n = 3;
-      yesBtn.textContent = `${yes} (${n})`;
-      const iv = setInterval(() => { n--; if (n <= 0) { clearInterval(iv); yesBtn.disabled = false; yesBtn.textContent = yes; } else yesBtn.textContent = `${yes} (${n})`; }, 1000);
-    }
     box.append(h('div', { class: 'row' }, noBtn, yesBtn));
     this.openModal(box);
     noBtn.focus();
   }
 
   // ---------- adoption ----------
+  /**
+   * Meet a new Fuzzlet. It only exists in memory until it has a name; backing out (or closing
+   * the app) part-way leaves every existing pet exactly as it was.
+   */
   startAdopt() {
     const g = this.g;
+    if (!canAddPet(g.store)) { this.showTitle(); this.toast(`Your home is full — ${MAX_PETS} Fuzzlets already!`, 'heart'); return; }
     g.audio.unlock();
+    g.persist();
     const s = newSave('', randomAppearance());
     g.load(s);
     g.mode = 'adopt';
     this.adoptStep = 'meet';
     this.titleShowsPet = true;
     this.modalRoot.innerHTML = '';
+    this.adoptBack();
     const pet = g.pet;
     const [bx, by] = g.world.poi('bed');
     pet.x = bx; pet.y = by; pet.body = 'lie'; pet.asleep = true;
@@ -159,6 +278,12 @@ export class UI {
     this.clearHud();
     this.hintEl.className = 'hint show big';
     this.hintEl.textContent = 'Shh… someone is napping in the bed. Tap to say hello!';
+  }
+
+  /** A way back to the pet list from any adoption step (only when there are pets to go back to). */
+  private adoptBack() {
+    if (!this.g.store.order.length) return;
+    this.modalRoot.append(h('button', { class: 'btn small adopt-back', onclick: () => { this.g.audio.click(); this.showTitle(); } }, '◀ Back'));
   }
 
   adoptTap(wx: number, wy: number) {
@@ -228,6 +353,7 @@ export class UI {
     render();
     this.modalRoot.innerHTML = '';
     this.modalRoot.append(h('div', { class: 'adopt-wrap' }, panel));
+    this.adoptBack();
   }
 
   private adoptName() {
@@ -252,19 +378,28 @@ export class UI {
     );
     this.modalRoot.innerHTML = '';
     this.modalRoot.append(h('div', { class: 'adopt-wrap' }, panel));
-    setTimeout(() => input.focus(), 50);
+    this.adoptBack();
+    setTimeout(() => { if (input.isConnected) input.focus(); }, 50);
   }
 
   private finishAdopt(name: string) {
     const g = this.g;
     const s = g.save;
+    // the new pet moves into a free slot of its own; nobody else is touched (and the home is
+    // checked as it is stored right now, so a full home is never overfilled)
+    if (!g.store.order.some((id) => g.store.pets[id] === s)) {
+      let added: string | null = null;
+      g.store = updateStore((st) => { added = addPet(st, s); }, g.store).store;
+      if (!added) { this.showTitle(); this.toast(`Your home is full — ${MAX_PETS} Fuzzlets already!`, 'heart'); return; }
+    }
     s.pet.name = name;
     s.createdAt = Date.now();
     addJournal(s.memory, 'heart', `${name} came home! The very first day together.`);
     this.adoptStep = null;
     this.modalRoot.innerHTML = '';
-    writeSave(s);
     g.mode = 'free';
+    g.persist();
+    g.diag.log('pets', `adopted ${name} (${g.store.order.length}/${MAX_PETS})`);
     g.pet.stop();
     g.pet.run((function* (): Gen {
       const pet = g.pet;
@@ -275,7 +410,7 @@ export class UI {
     })(), 'named', 3);
     g.startSession(false);
     this.banner(`Welcome home, ${name}!`);
-    setTimeout(() => g.hint('tap', `Tap ${name} to cuddle, or tap the floor to call them over!`), 2600);
+    setTimeout(() => { if (g.mode === 'free' && g.save === s) g.hint('tap', `Tap ${name} to cuddle, or tap the floor to call them over!`); }, 2600);
   }
 
   // ---------- HUD ----------
@@ -298,6 +433,7 @@ export class UI {
     else if (g.mode === 'minigame') this.renderMiniHud();
     else if (g.mode === 'walk') this.renderWalk();
     if (g.mode !== 'minigame' && g.mode !== 'walk') { this.miniHud.innerHTML = ''; this.miniHud.className = 'mini-hud'; }
+    if (this.hintEl.classList.contains('show') && !this.hintEl.classList.contains('big')) requestAnimationFrame(() => this.placeHint());
   }
 
   private renderTop() {
@@ -428,7 +564,14 @@ export class UI {
       panel.append(row);
       if (cu.food) panel.append(h('button', { class: 'btn primary', onclick: () => cu.giveFood() }, 'Give it! ♥'));
     } else if (cu.sub === 'brush') {
-      panel.append(h('p', { class: 'panel-tip' }, 'Drag the brush through the fur!'), h('button', { class: 'btn primary', onclick: () => cu.autoTool() }, img('brush', 'ic small'), 'Brush'));
+      const gs = cu.groomStage();
+      if (gs >= 0) {
+        // fresh from the bath: three little steps from poofy to groomed
+        const steps: [string, string][] = [['bath', 'Very poofy'], ['brush', 'Smoother'], ['sparkle', 'Groomed!']];
+        panel.append(h('div', { class: 'stages', 'aria-label': `Grooming: ${steps[gs][1]}` }, ...steps.map(([ic, st], i) => h('div', { class: 'stage' + (gs === i ? ' on' : gs > i ? ' done' : '') }, img(ic, 'ic small'), st))));
+        panel.append(h('p', { class: 'panel-tip' }, gs >= 2 ? `${s.pet.name} is smooth and shiny!` : 'Fresh from the bath! Brush the poofy fur smooth.'));
+      } else panel.append(h('p', { class: 'panel-tip' }, 'Drag the brush through the fur!'));
+      panel.append(h('button', { class: 'btn primary', onclick: () => cu.autoTool() }, img('brush', 'ic small'), 'Brush'));
     } else if (cu.sub === 'bath') {
       const stages = ['Soap', 'Rinse', 'Shake!', 'Dry'];
       const icons = ['soap', 'shower', 'water', 'towel'];
@@ -471,7 +614,7 @@ export class UI {
     for (let i = 0; i < total; i++) dots.append(h('span', { class: 'dot' + (i < w.idx || (i === w.idx && w.phase === 'wait') ? ' done' : i === w.idx ? ' on' : '') }));
     const tip = w.tip || { out: 'Off to the park!', travel: `${g.save.pet.name} is exploring… tap things you spot!`, event: `${g.save.pet.name} found something!`, wait: 'Keep walking when you\'re ready', choice: 'Which way?', home: 'Heading home…' }[w.phase];
     this.miniHud.append(h('div', { class: 'mini-title' }, 'Walkies!'), dots);
-    if (w.phase !== 'home' && w.phase !== 'out') this.miniHud.append(h('button', { class: 'btn small', onclick: () => { g.audio.click(); w.goHomeNow(); } }, img('home', 'ic small'), 'Home'));
+    if (w.phase !== 'home' && !w.homeNow) this.miniHud.append(h('button', { class: 'btn small', onclick: () => { g.audio.click(); w.goHomeNow(); } }, img('home', 'ic small'), 'Home'));
     this.miniHud.append(h('div', { class: 'mini-tip', 'aria-live': 'polite' }, tip));
     if (w.phase === 'wait') {
       this.bottom.append(h('div', { class: 'walk-go' }, h('button', { class: 'btn big primary', onclick: () => { g.audio.click(); w.next(); } }, img('walk', 'ic'), 'Keep walking →')));
@@ -579,8 +722,12 @@ export class UI {
     setTimeout(() => f.remove(), 1200);
   }
 
+  /** Keep a hint just above whatever is at the bottom of the screen (it changes between views). */
+  private placeHint() { const bh = this.bottom.getBoundingClientRect().height; this.hintEl.style.bottom = `${Math.max(100, bh + 18)}px`; }
+
   hint(text: string) {
-    const place = () => { const bh = this.bottom.getBoundingClientRect().height; this.hintEl.style.bottom = `${Math.max(100, bh + 18)}px`; };
+    if (this.g.mode === 'title' || this.g.mode === 'adopt') return; // (adoption shows its own)
+    const place = () => this.placeHint();
     place();
     requestAnimationFrame(place);
     this.hintEl.textContent = text;
@@ -668,11 +815,7 @@ export class UI {
       tabsEl.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.t === t));
       body.innerHTML = '';
       if (t === 'about') {
-        const cv = h('canvas', { width: '240', height: '240', class: 'portrait' }) as HTMLCanvasElement;
-        const ctx = cv.getContext('2d')!;
-        ctx.translate(120, 215); ctx.scale(1.05, 1.05);
-        const p = defaultPose(); p.sit = 1; p.front = 1; p.smile = 1; p.blush = 0.7; p.eyeHappy = 1; p.tailUp = 0.8; p.time = 1; p.tailPhase = 1;
-        drawPet(ctx, p, s.pet.appearance, s.equipped.wear, newRig());
+        const cv = this.petPortrait(s, 160, 'portrait');
         const days = Math.max(1, Math.ceil((Date.now() - s.createdAt) / 86400000));
         const traits = h('ul', { class: 'traits' });
         for (const k of ['energy', 'brave', 'cuddly', 'appetite', 'playful', 'curious'] as TraitId[]) {
@@ -816,7 +959,7 @@ export class UI {
   }
 
   openSettings() {
-    const g = this.g, st = g.save.settings;
+    const g = this.g, st = g.settings;
     const slider = (label: string, icon: string, v: number, on: (v: number) => void) => {
       const input = h('input', { type: 'range', min: '0', max: '1', step: '0.05', value: String(v), 'aria-label': label }) as HTMLInputElement;
       input.addEventListener('input', () => on(parseFloat(input.value)));
@@ -835,11 +978,36 @@ export class UI {
       toggle('High contrast', st.highContrast, (v) => { st.highContrast = v; g.applySettings(); }),
       toggle('Bigger text', st.largeText, (v) => { st.largeText = v; g.applySettings(); }),
       h('div', { class: 'row' },
-        h('button', { class: 'btn', onclick: () => { g.persist(); this.closeModal(); this.showTitle(); } }, 'Title screen'),
-        h('button', { class: 'btn danger-ghost', onclick: () => this.confirmReset(false) }, 'Reset save…'),
+        h('button', { class: 'btn', onclick: () => { g.audio.click(); this.closeAllModals(); this.showTitle(); } }, img('paw', 'ic small'), g.store.order.length > 1 ? 'Switch Fuzzlet' : 'My Fuzzlets'),
       ),
-      h('p', { class: 'panel-tip' }, 'Your pet is saved automatically on this device.'),
+      h('p', { class: 'panel-tip' }, `Your Fuzzlets are saved automatically on this device (up to ${MAX_PETS}).`),
     );
+    // grown-ups: five taps on the version line toggles the diagnostics overlay (no URL bar needed)
+    let taps = 0, tapT = 0;
+    const ver = h('p', { class: 'version', onclick: () => {
+      const now = performance.now(); taps = now - tapT < 800 ? taps + 1 : 1; tapT = now;
+      if (taps >= 5) { taps = 0; const on = g.diag.toggle(); this.toast(on ? 'Diagnostics on' : 'Diagnostics off', 'gear'); this.closeModal(); this.openSettings(); }
+    } }, `My Fuzzlet · v1.4${g.diag.enabled ? ' · diagnostics on' : ''}`);
+    body.append(ver);
+    if (g.diag.enabled) {
+      const saved = g.diag.saved();
+      body.append(h('details', { class: 'diag-saved' }, h('summary', {}, 'Last diagnostics report'), h('pre', {}, saved ?? 'Nothing recorded yet.')));
+    }
     this.openModal(this.modalShell('Settings', body));
+  }
+
+  /** Close every dialog (not the title screen). */
+  closeAllModals() { this.modalRoot.querySelectorAll('.backdrop').forEach((b) => b.remove()); }
+
+  /**
+   * Safety net for invisible blockers (see Game.healthCheck): an empty backdrop, a leftover title
+   * or adoption panel, or a tray open outside the free view would swallow taps.
+   */
+  healthCheck() {
+    const g = this.g;
+    this.modalRoot.querySelectorAll('.backdrop').forEach((b) => { if (!b.querySelector('.modal')) { g.diag.watchdog('empty dialog backdrop removed'); b.remove(); } });
+    if (g.mode !== 'title') this.modalRoot.querySelectorAll('.title-screen').forEach((el) => { g.diag.watchdog('title screen left over'); el.remove(); });
+    if (g.mode !== 'adopt') this.modalRoot.querySelectorAll('.adopt-wrap, .adopt-back').forEach((el) => { g.diag.watchdog('adoption panel left over'); el.remove(); });
+    if (this.trayKind && g.mode !== 'free') this.closeTray();
   }
 }

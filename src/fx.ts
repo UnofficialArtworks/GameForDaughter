@@ -13,6 +13,8 @@ export class FX {
   private lastHeart = 0;
   private t = 0;
 
+  clear() { for (const p of this.ps) p.on = false; }
+
   spawn(k: Kind, x: number, y: number, vx: number, vy: number, life: number, s = 1, g = 0, col = '#fff', icon = '') {
     const p = this.ps.find((q) => !q.on);
     if (!p) return;

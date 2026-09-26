@@ -152,9 +152,16 @@ export class Toys {
     }
   }
 
-  onUp(id: number) {
+  /** A gesture was cut off (app hidden, scene change): let go of whatever was held, no throw. */
+  cancelDrag() {
+    this.drag = null;
+    if (this.thr?.grabbed) { this.thr.grabbed = false; this.thr.vz = Math.max(this.thr.vz, 60); }
+  }
+
+  onUp(id: number, cancelled = false) {
     const d = this.drag;
     if (!d || d.id !== id) return;
+    if (cancelled) { this.cancelDrag(); return; }
     this.drag = null;
     if (this.thr?.grabbed) {
       const t = this.thr;

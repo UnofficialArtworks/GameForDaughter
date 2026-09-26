@@ -12,7 +12,8 @@ import { CloseUp } from './closeup';
 import { MiniGames } from './minigames';
 import { Walk } from './walk';
 import { UI } from './ui';
-import { SaveData, writeSave, friendshipLevel, dayKey, applyOffline, TraitId } from './state';
+import { Diag } from './diag';
+import { SaveData, SaveStore, updateStore, friendshipLevel, dayKey, applyOffline, TraitId, activePet, newSave, randomAppearance } from './state';
 import { COLLECTIBLES, KEEPSAKES, collectDef, FRIEND_LEVELS, FRIEND_UNLOCKS, foodDef, toyDef, SPOT_NAMES, PetSpot, TRICKS } from './data';
 import { addJournal, bump, playToy, addRecent } from './memory';
 import { clamp, damp, rand, chance } from './util';
@@ -36,6 +37,9 @@ export class Game {
   cam = { x: 500, y: 440, zoom: 1 };
   camT = { x: 500, y: 440, zoom: 1 };
   save!: SaveData;
+  /** Every Fuzzlet on this device (the active one is `save`) plus the global settings. */
+  store!: SaveStore;
+  diag: Diag;
   audio = new AudioManager();
   fx = new FX();
   world!: World;
@@ -59,14 +63,18 @@ export class Game {
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d')!;
+    this.diag = new Diag(this);
   }
 
-  get settings() { return this.save.settings; }
+  get settings() { return this.store.settings; }
   get friendLevel() { return friendshipLevel(this.save.pet.friendship, FRIEND_LEVELS); }
   get S() { return this.base * this.cam.zoom; }
 
-  init(save: SaveData) {
-    this.save = save;
+  init(store: SaveStore) {
+    this.store = store;
+    // until a pet is chosen on the title screen, a blank stand-in (never saved) keeps systems happy
+    this.save = activePet(store) ?? newSave('', randomAppearance());
+    this.save.settings = store.settings;
     this.world = new World(this);
     this.pet = new Pet(this);
     this.brain = new Brain(this);
@@ -79,22 +87,45 @@ export class Game {
     this.applySettings();
     this.resize();
     window.addEventListener('resize', () => this.resize());
+    // App lifecycle (a home-screen app on iPad is suspended and resumed rather than closed):
+    // leaving always saves and ends any touch in progress (the release may never arrive);
+    // coming back re-checks everything that could block input and wakes the audio.
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) { this.persist(); this.audio.suspend(true); }
-      else { this.audio.suspend(false); this.last = performance.now(); }
+      if (document.hidden) { this.diag.log('app', 'hidden'); this.persist(); this.input.cancelAll('app hidden'); this.audio.suspend(true); }
+      else this.resume('visible');
     });
-    window.addEventListener('pagehide', () => this.persist());
+    window.addEventListener('pagehide', () => { this.persist(); this.input.cancelAll('pagehide'); });
+    window.addEventListener('pageshow', (e) => { if ((e as PageTransitionEvent).persisted) this.resume('pageshow'); });
+    window.addEventListener('blur', () => this.input.cancelAll('window blur'));
+    window.addEventListener('error', (e) => this.diag.error('window', (e as ErrorEvent).error ?? (e as ErrorEvent).message));
+    window.addEventListener('unhandledrejection', (e) => this.diag.log('error', `unhandled rejection: ${String((e as PromiseRejectionEvent).reason)}`));
     requestAnimationFrame((t) => this.frame(t));
   }
 
-  /** Swap the active save (new game / continue). */
+  /** Back from the background (or regained focus): nothing transient survives, audio wakes up. */
+  resume(reason: string) {
+    this.diag.log('app', `resume (${reason})`);
+    this.input.cancelAll(reason);
+    this.audio.suspend(false);
+    this.last = performance.now();
+    this.healthCheck();
+  }
+
+  /** Swap the active pet (continue / switch / adopt). Every transient state is reset. */
   load(save: SaveData) {
+    this.input?.cancelAll('load pet');
     this.save = save;
+    save.settings = this.store.settings;
     this.zone = 'room';
     this.pet = new Pet(this);
     this.brain = new Brain(this);
     this.toys.clear();
+    this.closeup.reset();
+    this.mini.reset();
     this.walk = new Walk(this);
+    this.fx.clear();
+    this.recentGain = {};
+    this.saveT = 0;
     this.world.cacheKey = '';
     this.pet.x = 480; this.pet.y = 580;
     this.cam.x = this.camT.x = 500;
@@ -103,7 +134,7 @@ export class Game {
   }
 
   applySettings() {
-    const s = this.save.settings;
+    const s = this.settings;
     this.audio.setVolumes(s.music, s.sfx);
     this.fx.reduced = s.reducedMotion;
     document.documentElement.classList.toggle('hc', s.highContrast);
@@ -122,9 +153,23 @@ export class Game {
     this.base = Math.max(Math.min(this.H / 700, this.W / 520), this.H / 820);
   }
 
+  /**
+   * Save the pet being played. Only its own record is written (merged into what's stored), so this
+   * can never undo a pet adopted or removed elsewhere; only this pet's "last seen" time changes.
+   */
   persist() {
     if (this.mode === 'title' || this.mode === 'adopt') return;
-    writeSave(this.save);
+    const id = this.store.activePetId;
+    if (!id || this.store.pets[id] !== this.save) return; // a stand-in that isn't a real pet yet
+    this.save.lastSeen = Date.now();
+    const save = this.save;
+    const { store, ok } = updateStore((st) => {
+      if (!st.pets[id]) { st.pets[id] = save; if (!st.order.includes(id)) st.order.push(id); } // (removed elsewhere while playing: keep it)
+      st.pets[id] = save;
+      st.activePetId = id;
+    }, this.store);
+    this.store = store;
+    if (!ok) this.diag.logThrottled('save', 'save', 'could not write the save (storage full or unavailable?)', 30);
   }
 
   // ---------- main loop ----------
@@ -135,25 +180,33 @@ export class Game {
     this.last = t;
     if (!(dt > 0)) dt = 0.016;
     dt = Math.min(dt, 0.05);
-    this.update(dt);
-    this.render();
+    // an error in one frame must never freeze the game: log it and keep going
+    try { this.update(dt); } catch (e) { this.diag.error('update', e); }
+    try { this.render(); } catch (e) { this.diag.error('render', e); this.resize(); /* resets the canvas state */ }
   }
 
-  private update(dt: number) {
+  private healthT = 0;
+  private step(name: string, f: () => void) { try { f(); } catch (e) { this.diag.error(name, e); } }
+
+  update(dt: number) {
     this.time += dt;
     if (this.time - this.pointer.lastMove > 1.5) this.pointer.recent = false;
-    this.world.update(dt);
+    this.step('world', () => this.world.update(dt));
     if (this.mode !== 'title') {
-      this.brain.update(dt);
-      this.pet.update(dt);
-      this.toys.update(dt);
-      this.input.update(dt);
-      this.closeup.update(dt);
-      this.mini.update(dt);
-      this.walk.update(dt);
+      // each system updates on its own: a bug in one can't stop the others (or input)
+      this.step('brain', () => this.brain.update(dt));
+      this.step('pet', () => this.pet.update(dt));
+      this.step('toys', () => this.toys.update(dt));
+      this.step('input', () => this.input.update(dt));
+      this.step('closeup', () => this.closeup.update(dt));
+      this.step('mini', () => this.mini.update(dt));
+      this.step('walk', () => this.walk.update(dt));
     } else {
-      this.pet.update(dt);
+      this.step('pet', () => this.pet.update(dt));
     }
+    this.healthT -= dt;
+    if (this.healthT <= 0) { this.healthT = 0.5; this.step('health', () => this.healthCheck()); }
+    this.diag.update(dt);
     this.fx.update(dt);
     for (const k in this.recentGain) this.recentGain[k] *= Math.exp(-dt / 90);
     this.updateCamera(dt);
@@ -165,6 +218,21 @@ export class Game {
     }
     this.audio.night = this.world.isNight();
     this.ui.update(dt);
+  }
+
+  /**
+   * Safety nets for states that would leave the player unable to do anything. The primary fixes
+   * live where those states are created; these only catch what slips through, and every one that
+   * fires is recorded in the diagnostics. None can trigger during normal play.
+   */
+  healthCheck() {
+    const w = this.walk;
+    if (this.mode === 'walk' && !w.active) w.abort('walk mode with no walk running');
+    else if (this.mode !== 'walk' && w.active) w.abort(`walk still running in ${this.mode} mode`);
+    if (this.mode !== 'walk' && w.fadeLevel > 0) { this.diag.watchdog('walk fade left on screen'); w.clearFade(); }
+    if (this.mode === 'closeup' && !this.closeup.sub) { this.diag.watchdog('close-up with nothing open'); this.closeup.close(); }
+    if (this.mode === 'minigame' && !this.mini.id) { this.diag.watchdog('game mode with no game'); this.mode = 'free'; this.ui.refresh(); }
+    this.ui.healthCheck();
   }
 
   frontPoint(): [number, number] {
@@ -186,7 +254,7 @@ export class Game {
       const cx = a.x + a.w / 2, cy = a.y + a.h / 2;
       this.camT.x = this.pet.x - (cx - this.W / 2) / Sz;
       this.camT.y = this.pet.y - 100 * this.pet.depth - (cy - this.H / 2) / Sz;
-    } else if (this.mode === 'walk') {
+    } else if (this.mode === 'walk' && this.walk.scene === 'park') {
       this.camT.zoom = 1;
       this.camT.x = this.walk.camX();
       this.camT.y = this.freeCamY();
@@ -227,7 +295,7 @@ export class Game {
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     ctx.setTransform(d * S, 0, 0, d * S, d * (this.W / 2 - this.cam.x * S), d * (this.H / 2 - this.cam.y * S));
     const x0 = this.cam.x - this.W / 2 / S, x1 = this.cam.x + this.W / 2 / S;
-    const walking = this.mode === 'walk';
+    const walking = this.mode === 'walk' && this.walk.scene === 'park';
     let items: { y: number; draw: (c: CanvasRenderingContext2D) => void }[];
     if (walking) {
       this.walk.drawBack(ctx, x0, x1);
@@ -326,7 +394,7 @@ export class Game {
   toast(id: string, text: string, icon = 'sparkle') { this.ui.toast(text, icon); }
 
   hint(id: string, text: string) {
-    if (this.save.flags['hint_' + id]) return;
+    if (this.save.flags['hint_' + id] || this.mode === 'title' || this.mode === 'adopt') return;
     this.save.flags['hint_' + id] = true;
     this.ui.hint(text);
   }
@@ -454,7 +522,7 @@ export class Game {
       this.pet.run(this.brain.greet(away, false), 'greet', 3);
     }
     if (returning && newDay) this.earn(10, true);
-    writeSave(s);
+    this.persist();
   }
 
   /** A new decoration was placed: the pet will go and check it out. */

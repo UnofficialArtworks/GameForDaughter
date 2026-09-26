@@ -16,8 +16,21 @@ export class AudioManager {
   private lastStep = 0;
   night = false;
 
+  constructor() {
+    // Sound is never allowed to break the game: a Web Audio hiccup (an interrupted or closed
+    // context after the iPad was locked, a bad value…) just means silence for that sound, never an
+    // exception in the middle of a button press, a pet action or a walk.
+    const proto = AudioManager.prototype as unknown as Record<string, unknown>;
+    for (const k of Object.getOwnPropertyNames(proto)) {
+      const f = proto[k];
+      if (k === 'constructor' || typeof f !== 'function') continue;
+      (this as unknown as Record<string, unknown>)[k] = (...a: unknown[]) => { try { return (f as (...x: unknown[]) => unknown).apply(this, a); } catch { return undefined; } };
+    }
+  }
+
   unlock() {
-    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    // iOS may leave the context 'suspended' or 'interrupted' after the app was in the background
+    if (this.ctx) { if (this.ctx.state !== 'running') this.ctx.resume().catch(() => { /* retried on the next tap */ }); return; }
     const AC = window.AudioContext || (window as any).webkitAudioContext;
     if (!AC) return;
     const c = new AC();
@@ -42,7 +55,7 @@ export class AudioManager {
 
   suspend(v: boolean) {
     if (!this.ctx) return;
-    if (v) this.ctx.suspend(); else this.ctx.resume();
+    (v ? this.ctx.suspend() : this.ctx.resume()).catch(() => { /* the next tap tries again */ });
   }
 
   private ok() { return this.ctx && this.ctx.state === 'running' && this.sfxVol > 0; }
@@ -160,7 +173,7 @@ export class AudioManager {
     if (!this.ctx) return;
     this.nextNote = this.ctx.currentTime + 0.3;
     clearInterval(this.musicTimer);
-    this.musicTimer = window.setInterval(() => this.schedule(), 120);
+    this.musicTimer = window.setInterval(() => { try { this.schedule(); } catch { /* skip this beat */ } }, 120);
   }
 
   private schedule() {

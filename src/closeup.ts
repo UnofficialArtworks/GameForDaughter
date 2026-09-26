@@ -12,10 +12,12 @@ type Tool = 'brush' | 'soap' | 'shower' | 'towel';
 
 export class CloseUp {
   sub: Sub | null = null;
-  food: { id: string; x: number; y: number; drag: boolean; bites: number; eating: boolean } | null = null;
+  food: { id: string; x: number; y: number; drag: boolean; dragId?: number; bites: number; eating: boolean } | null = null;
   tool: { kind: Tool; x: number; y: number; drag: boolean; id: number } | null = null;
   bathStage = 0; // 0 soap, 1 rinse, 2 shake, 3 towel, 4 done
   bathOn = false;
+  /** Bath progress kept here too: a new pet action resets pet.o, and scrubbing must never be lost. */
+  private bathFoam = 0; private bathWet = 0;
   private progress = 0;
   private lastSound = 0;
   private brushRecent = -10;
@@ -23,14 +25,25 @@ export class CloseUp {
   auto: { zone: string; t: number } | null = null;
   highFiveFlash = 0;
   private fluffyShown = false;
+  /** Brushing a pet fresh from the bath: the brush smooths the poofy fur (stage 0 very poofy → 2 groomed). */
+  groom: { stage: number } | null = null;
   /** A short reaction to play before settling back into the idle loop (e.g. bath jitters). */
   private pending: Gen | null = null;
 
   constructor(public g: Game) {}
 
+  /** Forget everything about the current close-up (used when switching pets). */
+  reset() {
+    this.sub = null; this.food = null; this.tool = null; this.bathOn = false; this.bathStage = 0; this.auto = null;
+    this.trick.phase = 'idle'; this.pending = null; this.autoToolT = 0; this.groom = null;
+  }
+
   open(sub: Sub) {
     const g = this.g;
+    if (g.walk.active || g.mode === 'title' || g.mode === 'adopt') return;
+    if (g.mode === 'minigame') g.mini.end();
     g.toys.clear();
+    g.input.cancelAll('close-up');
     g.mode = 'closeup';
     this.setSub(sub);
     g.audio.open();
@@ -42,8 +55,10 @@ export class CloseUp {
   close() {
     const g = this.g;
     this.sub = null; this.food = null; this.tool = null; this.bathOn = false; this.auto = null;
-    this.trick.phase = 'idle';
-    g.mode = 'free';
+    this.trick.phase = 'idle'; this.autoToolT = 0; this.pending = null;
+    this.endGroom();
+    g.input.cancelAll('close-up closed');
+    if (g.mode === 'closeup') g.mode = 'free';
     g.pet.o = {};
     g.pet.run((function* (): Gen { g.pet.body = 'stand'; g.pet.expr = 'happy'; yield* wait(g.pet, 0.6); })(), 'release', 1);
     g.ui.refresh();
@@ -52,6 +67,7 @@ export class CloseUp {
   setSub(sub: Sub) {
     const g = this.g;
     if (this.bathOn && sub !== 'bath') { this.bathOn = false; g.pet.o.foam = 0; g.pet.o.wet = 0; }
+    if (sub !== 'brush') this.endGroom();
     this.sub = sub;
     this.food = null; this.tool = null; this.auto = null;
     this.trick.phase = 'idle';
@@ -307,7 +323,7 @@ export class CloseUp {
     const g = this.g;
     this.bathOn = true; this.bathStage = 0; this.progress = 0;
     this.tool = { kind: 'soap', ...this.restPos(), drag: false, id: -1 };
-    g.pet.o.foam = 0; g.pet.o.wet = 0.3;
+    g.pet.o.foam = 0; g.pet.o.wet = 0.3; this.bathFoam = 0; this.bathWet = 0.3;
     g.audio.splash();
     g.pet.jump(250);
     g.hint('bath', 'Scrub bubbles onto your pet!');
@@ -346,6 +362,15 @@ export class CloseUp {
   private *brushHello(): Gen {
     const g = this.g, pet = g.pet;
     g.brain.grow('brush', 0.03);
+    if (g.brain.ruffle > 0.3) {
+      // fresh from the bath: a look down at its own wild, poofy fur… then a hopeful look at the brush
+      pet.o = {}; pet.body = 'sit'; pet.o.front = 1;
+      pet.expr = 'surprised'; pet.o.headDown = 0.35; pet.lookAt = { x: pet.x, y: pet.y - 30 };
+      yield* wait(pet, 0.8);
+      pet.o.headDown = 0; pet.lookAt = { x: this.tool?.x ?? pet.x, y: this.tool?.y ?? pet.y }; pet.expr = 'happy'; pet.o.tailWag = 1.2; g.audio.voice('question');
+      yield* wait(pet, 0.7);
+      return;
+    }
     if (!this.brushFan()) return;
     pet.o = {}; pet.body = 'sit'; pet.o.front = 1; pet.lookCam = 1;
     pet.expr = 'love'; pet.o.tailWag = 1.3; g.audio.voice('coo'); pet.jump(120);
@@ -382,7 +407,7 @@ export class CloseUp {
         pet.o.shake = 1; g.audio.shake();
         for (let i = 0; i < 6; i++) { g.fx.drops(pet.x, pet.y - 100, 6, 380); yield* wait(pet, 0.15); }
         g.ui.splashScreen();
-        pet.o.shake = 0; pet.o.wet = 0.6; pet.expr = 'joy'; g.audio.voice('giggle');
+        pet.o.shake = 0; pet.o.wet = 0.6; cu.bathWet = 0.6; pet.expr = 'joy'; g.audio.voice('giggle');
         yield* wait(pet, 0.6);
         cu.bathStage = 3; cu.tool = { kind: 'towel', ...cu.restPos(), drag: false, id: -1 };
         g.hint('towel', 'Dry off with the fluffy towel!');
@@ -394,8 +419,9 @@ export class CloseUp {
       this.tool = null;
       const s = g.save;
       s.pet.needs.clean = 1;
-      pet.o.wet = 0; pet.o.floof = 1;
+      pet.o.wet = 0; pet.o.floof = 1; this.bathWet = 0; this.bathFoam = 0;
       g.brain.poof = 90; // extra poofy for a while afterwards
+      g.brain.ruffle = 1; // …and the fur sticks out every which way until it's brushed smooth
       g.brain.st.mark('bathed');
       g.brain.grow('bath', 0.15);
       g.fx.sparkles(pet.x, pet.y - 110, 12, 90);
@@ -408,6 +434,7 @@ export class CloseUp {
         yield* wait(pet, 1.2);
         cu.bathOn = false; pet.o = {}; pet.o.floof = 1;
         cu.setSub('cuddle');
+        g.hint('groom', `${s.pet.name} is super poofy! Try the Brush to smooth the fur.`);
       })(this), 'closeup', 3);
     }
   }
@@ -500,7 +527,7 @@ export class CloseUp {
   onDown(wx: number, wy: number, id: number): boolean {
     const g = this.g;
     if (this.food && !this.food.eating) {
-      if (dist(wx, wy, this.food.x, this.food.y) < 70) { this.food.drag = true; return true; }
+      if (dist(wx, wy, this.food.x, this.food.y) < 70) { this.food.drag = true; this.food.dragId = id; return true; }
       if (g.pet.hitZone(wx, wy, 1.1)) { this.giveFood(); return true; }
     }
     if (this.tool) {
@@ -513,7 +540,7 @@ export class CloseUp {
   }
 
   onMove(wx: number, wy: number, id: number) {
-    if (this.food?.drag) {
+    if (this.food?.drag && this.food.dragId === id) {
       this.food.x = wx; this.food.y = wy;
       const [mx, my] = this.g.pet.mouthPos();
       if (dist(wx, wy, mx, my) < 55) { this.food.drag = false; this.giveFood(); }
@@ -526,16 +553,22 @@ export class CloseUp {
     }
   }
 
-  onUp(id: number) {
-    if (this.food?.drag) {
+  onUp(id: number, cancelled = false) {
+    if (this.food?.drag && this.food.dragId === id) {
       this.food.drag = false;
       const [mx, my] = this.g.pet.mouthPos();
-      if (dist(this.food.x, this.food.y, mx, my) < 90) this.giveFood();
+      if (!cancelled && this.g.mode === 'closeup' && dist(this.food.x, this.food.y, mx, my) < 90) this.giveFood();
     }
     if (this.tool && this.tool.id === id) { this.tool.drag = false; }
   }
 
   private toolWork(wx: number, wy: number, d: number) {
+    this.toolStroke(wx, wy, d);
+    const o = this.g.pet.o;
+    if (this.bathOn) { this.bathFoam = o.foam ?? this.bathFoam; this.bathWet = o.wet ?? this.bathWet; }
+  }
+
+  private toolStroke(wx: number, wy: number, d: number) {
     const g = this.g, pet = g.pet, t = this.tool!;
     const over = pet.hitZone(wx, wy, 1.25);
     const now = g.time;
@@ -546,7 +579,8 @@ export class CloseUp {
       const n = g.save.pet.needs;
       n.clean = clamp01(n.clean + d * 0.00012);
       n.affection = clamp01(n.affection + d * 0.00005);
-      pet.o.floof = Math.min(1, (pet.o.floof ?? pet.pose.floof) + d * 0.0006);
+      if (g.brain.ruffle > 0.02 || this.groom) this.smoothFur(d);
+      else pet.o.floof = Math.min(1, (pet.o.floof ?? pet.pose.floof) + d * 0.0006);
       if (now - this.lastSound > 0.14) { this.lastSound = now; g.audio.brush(); g.fx.fur(wx, wy, PALETTES[g.save.pet.appearance.palette].main); if (chance(0.3)) g.fx.sparkles(wx, wy, 1, 10); }
       if (this.progress > 160) {
         this.progress = 0;
@@ -556,7 +590,7 @@ export class CloseUp {
         g.brain.st.mark('brushed');
         g.brain.grow('brush', 0.012);
       }
-      if ((pet.o.floof ?? 0) >= 0.98 && !this.fluffyShown) {
+      if (!this.groom && (pet.o.floof ?? 0) >= 0.98 && !this.fluffyShown) {
         this.fluffyShown = true;
         g.toast('fluffy', 'SO FLUFFY!', 'sparkle');
         g.fx.sparkles(pet.x, pet.y - 100, 10, 80);
@@ -579,10 +613,80 @@ export class CloseUp {
     } else if (t.kind === 'towel') {
       if (!over) return;
       pet.o.wet = Math.max(0, (pet.o.wet ?? 0) - d * 0.0007);
+      g.brain.ruffle = Math.max(g.brain.ruffle, 1 - (pet.o.wet ?? 0)); // towel-dried fur goes every which way
       pet.expr = 'bliss';
       if (now - this.lastSound > 0.15) { this.lastSound = now; g.audio.brush(); }
       if (pet.o.wet <= 0.02 && this.bathStage === 3) this.advanceBath();
     }
+  }
+
+  /** Which grooming stage the fur is at: -1 not post-bath, 0 very poofy, 1 smoother, 2 groomed. */
+  groomStage(): number {
+    const r = this.g.brain.ruffle;
+    if (!this.groom && r <= 0.02) return -1;
+    return r > 0.5 ? 0 : r > 0.02 ? 1 : 2;
+  }
+
+  /** Each brush stroke over a post-bath poof flattens a few more tufts. */
+  private smoothFur(d: number) {
+    const g = this.g, b = g.brain, pet = g.pet;
+    if (!this.groom) this.groom = { stage: this.groomStage() };
+    if (this.groom.stage >= 2) return; // already groomed: just a lovely brush now
+    b.ruffle = Math.max(0, b.ruffle - d / 2600);
+    b.poof = Math.min(b.poof, b.ruffle * 90);
+    pet.o.floof = b.ruffle; // the poof goes down with the tufts
+    const st = this.groomStage();
+    if (st <= this.groom.stage) return;
+    this.groom.stage = st;
+    const [hx, hy] = pet.headPos();
+    if (st === 1) {
+      g.fx.sparkles(hx, hy, 5, 50); g.audio.chime();
+      this.pending = this.groomWiggle();
+    } else {
+      b.ruffle = 0; b.poof = 0; b.shine = 3.5; pet.o.floof = 0;
+      g.fx.sparkles(pet.x, pet.y - 110 * pet.depth, 14, 90); g.audio.reward();
+      g.toast('groomed', `${g.save.pet.name} is smooth and shiny!`, 'sparkle');
+      g.addFriend('groom', 3);
+      g.save.pet.needs.affection = clamp01(g.save.pet.needs.affection + 0.1);
+      g.bump('grooms');
+      g.brain.st.mark('groomed');
+      if (!g.save.flags.firstGroom) { g.save.flags.firstGroom = true; addJournal(g.save.memory, 'brush', `Brushed ${g.save.pet.name}'s post-bath poof smooth and shiny.`); }
+      this.pending = this.groomedJoy();
+    }
+    g.ui.refresh();
+  }
+
+  endGroom() {
+    if (!this.groom) return;
+    this.groom = null;
+    const pet = this.g.pet;
+    if (pet.o.floof !== undefined) pet.o.floof = undefined;
+  }
+
+  /** Smoother already: a pleased little wiggle. */
+  private *groomWiggle(): Gen {
+    const g = this.g, pet = g.pet;
+    pet.body = 'sit'; pet.o.front = 1; pet.lookCam = 1;
+    pet.expr = 'joy'; g.audio.voice('giggle'); pet.o.tailWag = 1.4;
+    for (let i = 0; i < 4; i++) { pet.o.tilt = i % 2 ? 0.06 : -0.06; yield* wait(pet, 0.09); }
+    pet.o.tilt = 0;
+    yield* wait(pet, 0.3);
+  }
+
+  /** All smooth: it admires its fur on one side, then the other… then a proud, happy hop. */
+  private *groomedJoy(): Gen {
+    const g = this.g, pet = g.pet;
+    pet.body = 'sit'; pet.o.front = 1; pet.lookCam = 0;
+    pet.expr = 'curious'; pet.o.headDown = 0.3; pet.o.headTilt = -0.3; pet.lookAt = { x: pet.x - 90, y: pet.y - 50 };
+    yield* wait(pet, 0.6);
+    pet.o.headTilt = 0.3; pet.lookAt = { x: pet.x + 90, y: pet.y - 50 };
+    yield* wait(pet, 0.6);
+    pet.o = {}; pet.o.front = 1; pet.lookAt = null; pet.lookCam = 1;
+    pet.expr = 'starry'; g.audio.voice('excited'); pet.jump(220);
+    g.fx.hearts(pet.x, pet.y - 170 * pet.depth, 4);
+    yield* wait(pet, 0.9);
+    pet.expr = 'love'; pet.o.tailWag = 1.5; g.brain.purr = 0.8;
+    yield* wait(pet, 1.1);
   }
 
   private floatBubble() {
@@ -606,6 +710,7 @@ export class CloseUp {
     if (g.mode !== 'closeup') return;
     const pet = g.pet;
     if (!pet.action) pet.run(this.idleLoop(false), 'closeup', 2);
+    if (this.bathOn && this.bathStage < 4) { pet.o.foam ??= this.bathFoam; pet.o.wet ??= this.bathWet; }
     // accessibility: auto-stroke a spot
     if (this.auto) {
       const a = this.auto;

@@ -1,4 +1,14 @@
 // Pointer / touch handling: stroke-detected petting, pick-up & carry, taps on the pet and world.
+//
+// Gesture lifecycle (the part that must never get stuck):
+// - Every pointer pressed on the game is tracked in `pointers` from pointerdown until its
+//   pointerup/pointercancel. Ends are listened for on the window, so a release is seen even if
+//   pointer capture is lost or it lands on an overlay.
+// - One gesture on the pet at a time (`touch`): a second finger never takes over or orphans it.
+// - A gesture always ends through finishTouch(), which drops a carried pet. cancelAll() ends
+//   everything and is called when the app is hidden/backgrounded and on every scene change.
+// - Safety net (update): a carried pet with no carrying finger, a gesture whose pointer is
+//   gone, or a pointer that has been silent for a long time is cleaned up and reported to Diag.
 import type { Game } from './game';
 import type { Gen } from './pet/Pet';
 import { wait } from './pet/brain';
@@ -8,8 +18,15 @@ import { chance, clamp, clamp01, dist, rand } from './util';
 
 interface Touch { id: number; zone: string | null; t0: number; sx: number; sy: number; wx: number; wy: number; moved: number; mode: 'pending' | 'stroke' | 'carry' | 'none'; floorY: number; }
 
+/** A pointer that has been pressed but has sent nothing for this long is treated as gone. */
+const SILENT_POINTER_S = 12;
+/** …and a carry with no movement at all this long ends (the pet wriggles free). */
+const SILENT_CARRY_S = 20;
+
 export class Interaction {
   touch: Touch | null = null;
+  /** Pointers currently pressed on the game: id → type and when we last heard from it (game time). */
+  readonly pointers = new Map<number, { type: string; t: number }>();
   // petting state (read by the petting action)
   strokeRate = 0; // smoothed local-units/sec
   lastStroke = -10;
@@ -21,28 +38,38 @@ export class Interaction {
 
   constructor(public g: Game) {
     const c = g.canvas;
-    c.addEventListener('pointerdown', (e) => this.down(e));
-    c.addEventListener('pointermove', (e) => this.move(e));
-    c.addEventListener('pointerup', (e) => this.up(e));
-    c.addEventListener('pointercancel', (e) => this.up(e));
+    const safe = (f: (e: PointerEvent) => void) => (e: PointerEvent) => { try { f(e); } catch (err) { g.diag.error('input ' + e.type, err); } };
+    c.addEventListener('pointerdown', safe((e) => this.down(e)));
+    window.addEventListener('pointermove', safe((e) => this.move(e)), true);
+    window.addEventListener('pointerup', safe((e) => this.up(e, false)), true);
+    window.addEventListener('pointercancel', safe((e) => this.up(e, true)), true);
+    c.addEventListener('lostpointercapture', safe((e) => this.lostCapture(e)));
     c.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
   private down(e: PointerEvent) {
     const g = this.g;
     g.audio.unlock();
+    // A new primary pointer means every earlier pointer of that kind was released, even if the
+    // browser never told us (e.g. the app was backgrounded mid-touch): end those gestures first.
+    if (e.isPrimary) for (const [id, p] of [...this.pointers]) if (id !== e.pointerId && p.type === e.pointerType) this.endPointer(id, 'stale (new primary)');
+    if (this.pointers.has(e.pointerId)) this.endPointer(e.pointerId, 'pressed again');
     if (g.mode === 'title' || g.mode === 'adopt' && g.ui.adoptStep !== 'look' && g.ui.adoptStep !== 'meet') return;
+    this.pointers.set(e.pointerId, { type: e.pointerType, t: g.time });
+    g.diag.logThrottled('down', 'input', `down ${e.pointerType}#${e.pointerId} mode=${g.mode}${this.pointers.size > 1 ? ` (${this.pointers.size} pointers)` : ''}`, 0.5);
     const [wx, wy] = g.toWorld(e.clientX, e.clientY);
     this.setPointer(e, wx, wy);
     try { g.canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     if (g.mode === 'adopt') { g.ui.adoptTap(wx, wy); return; }
-    if (g.mode === 'minigame' && g.mini.onDown(wx, wy)) return;
+    if (g.mode === 'minigame' && g.mini.onDown(wx, wy, e.pointerId)) return;
     if (g.mode === 'walk' && g.walk.onDown(wx, wy)) return;
     if (g.mode === 'closeup' && g.closeup.onDown(wx, wy, e.pointerId)) return;
     const zone = g.pet.hitZone(wx, wy, g.mode === 'closeup' ? 1.05 : 1.15);
     if (zone && g.toys.active && g.toys.thr?.carried) { g.toys.petTaps++; return; }
     if (!zone && g.toys.onDown(wx, wy, e.pointerId)) return;
     if (zone) {
+      // one gesture on the pet at a time: another finger never takes over (or orphans) it
+      if (this.touch) return;
       this.touch = { id: e.pointerId, zone, t0: g.time, sx: e.clientX, sy: e.clientY, wx, wy, moved: 0, mode: 'pending', floorY: g.pet.y };
       return;
     }
@@ -58,12 +85,17 @@ export class Interaction {
 
   private move(e: PointerEvent) {
     const g = this.g;
+    const tracked = this.pointers.get(e.pointerId);
+    // hovering over the HUD (or anywhere off the game) is none of our business
+    if (!tracked && e.target !== g.canvas) return;
+    if (tracked) tracked.t = g.time;
     if (g.mode === 'title') return;
     const [wx, wy] = g.toWorld(e.clientX, e.clientY);
     this.setPointer(e, wx, wy);
+    if (!tracked) return; // a mouse just hovering: the pet may look at it, nothing else
     if (g.mode === 'closeup') g.closeup.onMove(wx, wy, e.pointerId);
     g.toys.onMove(wx, wy, e.pointerId);
-    if (g.mode === 'minigame') g.mini.onMove(wx, wy);
+    if (g.mode === 'minigame') g.mini.onMove(wx, wy, e.pointerId);
     const t = this.touch;
     if (!t || t.id !== e.pointerId) return;
     const dsx = e.clientX - t.sx, dsy = e.clientY - t.sy;
@@ -76,22 +108,76 @@ export class Interaction {
     if (t.mode === 'carry') this.carryTo(wx, wy);
   }
 
-  private up(e: PointerEvent) {
+  /** pointerup (released) or pointercancel (the system took the touch: no tap, nothing thrown). */
+  private up(e: PointerEvent, cancelled: boolean) {
+    if (!this.pointers.has(e.pointerId)) return;
+    if (cancelled) this.g.diag.log('input', `cancel ${e.pointerType}#${e.pointerId}`);
+    this.release(e.pointerId, cancelled ? 'cancel' : 'up');
+  }
+
+  /** Capture normally goes away right after the release. If the pointer is still pressed a moment
+   *  later and has gone quiet, the gesture was cut off: end it rather than leave it hanging. */
+  private lostCapture(e: PointerEvent) {
+    const id = e.pointerId;
+    const p = this.pointers.get(id);
+    if (!p) return;
+    const since = p.t;
+    setTimeout(() => {
+      const q = this.pointers.get(id);
+      if (q && q.t === since) this.endPointer(id, 'lost pointer capture');
+    }, 250);
+  }
+
+  private release(id: number, how: 'up' | 'cancel' | 'stale') {
     const g = this.g;
-    if (g.mode === 'closeup') g.closeup.onUp(e.pointerId);
-    g.toys.onUp(e.pointerId);
+    this.pointers.delete(id);
+    try { if (g.canvas.hasPointerCapture?.(id)) g.canvas.releasePointerCapture(id); } catch { /* ignore */ }
+    g.closeup.onUp(id, how !== 'up');
+    g.toys.onUp(id, how !== 'up');
     const t = this.touch;
-    if (!t || t.id !== e.pointerId) return;
-    this.touch = null;
-    if (t.mode === 'pending') {
-      if (g.time - t.t0 < 0.45) this.tapPet(t.zone ?? 'back', t.wx, t.wy);
-      else this.strokeAt(t.wx, t.wy, 60); // a gentle held touch counts as a pat
-    } else if (t.mode === 'carry') this.drop();
+    if (t && t.id === id) this.finishTouch(t, how);
+  }
+
+  /** End a pointer's gesture without tap semantics (its release never arrived). */
+  private endPointer(id: number, why: string) {
+    this.g.diag.watchdog(`pointer #${id} ended: ${why}`);
+    this.release(id, 'stale');
+  }
+
+  /** The one way a pet gesture ends: a carried pet is always put down. */
+  private finishTouch(t: Touch, how: 'up' | 'cancel' | 'stale') {
+    const g = this.g;
+    if (this.touch === t) this.touch = null;
+    if (t.mode === 'carry') { this.drop(); return; }
+    if (how !== 'up' || t.mode !== 'pending') return;
+    if (g.time - t.t0 < 0.45) this.tapPet(t.zone ?? 'back', t.wx, t.wy);
+    else this.strokeAt(t.wx, t.wy, 60); // a gentle held touch counts as a pat
+  }
+
+  /**
+   * End every gesture in progress (fingers lifted or not). Called when the app is hidden or loses
+   * focus, and on every scene change (walks, close-ups, games, switching pets, the title screen).
+   */
+  cancelAll(reason: string) {
+    const g = this.g;
+    const had = this.pointers.size > 0 || !!this.touch || g.pet?.carried;
+    for (const id of [...this.pointers.keys()]) this.release(id, 'stale');
+    if (this.touch) this.finishTouch(this.touch, 'stale');
+    if (g.pet?.carried) this.drop();
+    g.toys.cancelDrag();
+    if (had) g.diag.log('input', `cancelAll: ${reason}`);
   }
 
   update(dt: number) {
     const g = this.g;
     this.strokeRate *= Math.exp(-dt * 3);
+    // ---- safety net: a gesture must always have a live pointer behind it ----
+    if (g.pet.carried && (!this.touch || this.touch.mode !== 'carry')) { g.diag.watchdog('pet was carried with no finger holding it'); this.drop(); }
+    if (this.touch && !this.pointers.has(this.touch.id)) { g.diag.watchdog('gesture without a pointer'); this.finishTouch(this.touch, 'stale'); }
+    for (const [id, p] of [...this.pointers]) {
+      const carrying = this.touch?.id === id && this.touch.mode === 'carry';
+      if (g.time - p.t > (carrying ? SILENT_CARRY_S : SILENT_POINTER_S)) this.endPointer(id, `silent for ${Math.round(g.time - p.t)}s`);
+    }
     const t = this.touch;
     if (t && t.mode === 'pending' && g.time - t.t0 > 0.45 && t.moved < 9) {
       if (g.mode === 'free' && !g.toys.active) this.startCarry();
@@ -115,8 +201,10 @@ export class Interaction {
     this.strokeZone = zone;
     this.handX = wx; this.handY = wy; this.handA = 1;
     if (g.pet.actionName !== 'petting' && !g.pet.carried) {
-      if (g.pet.busy(3) && g.pet.actionName !== 'greet') return;
-      g.pet.run(this.pettingLoop(), 'petting', 3);
+      // busy with something important (e.g. resting at the bench on a walk): the pat still counts,
+      // the pet just doesn't drop what it's doing
+      if (!(g.pet.busy(3) && g.pet.actionName !== 'greet')) g.pet.run(this.pettingLoop(), 'petting', 3);
+      else g.brain.purr = Math.max(g.brain.purr, 0.3);
     }
     // accumulate memory in chunks
     this.chunk[zone] = (this.chunk[zone] ?? 0) + local;
@@ -213,7 +301,8 @@ export class Interaction {
     g.brain.noteInteraction(0.08);
     if (g.mode === 'free' && !g.toys.active && !pet.busy(2)) { g.closeup.open('cuddle'); return; }
     if (g.mode !== 'closeup' && g.toys.active) return;
-    if (pet.busy(4)) return;
+    // in the middle of something (eating, a trick, a moment on a walk): a happy look, no interruption
+    if (pet.busy(3) && pet.actionName !== 'greet' && pet.actionName !== 'petting') { pet.emote('heart', 1); g.audio.voice('coo'); return; }
     const tr = g.save.pet.traits;
     pet.run((function* (): Gen {
       pet.lookCam = 1;

@@ -119,6 +119,10 @@ export class Brain {
   private lastGrant: { kind: string; t: number } | null = null;
   /** Seconds of extra post-bath poof left. */
   poof = 0;
+  /** Post-bath messy fur, 1 = wild. Brushing smooths it (see CloseUp); left alone it settles in ~5 min. */
+  ruffle = 0;
+  /** Seconds of "just groomed" shine left. */
+  shine = 0;
   /** Something new was placed in the world: the pet will want to check it out. */
   novel: { x: number; y: number; look?: number } | null = null;
   /** A friendly gesture the pet is offering (e.g. a raised paw for a high five). */
@@ -179,6 +183,8 @@ export class Brain {
     this.grump = Math.max(0, this.grump - dt * 0.08);
     this.buzz = Math.max(0, this.buzz - dt * 0.02);
     this.poof = Math.max(0, this.poof - dt);
+    if (!this.g.closeup.groom) this.ruffle = Math.max(0, this.ruffle - dt / 300);
+    this.shine = Math.max(0, this.shine - dt);
     this.sinceInteract += dt;
     this.mischief += dt * (0.002 + this.tr.playful * 0.004);
     if (this.mischief > 1) this.mischief = 0;
