@@ -13,12 +13,17 @@ npm install
 npm run dev        # open the printed http://localhost:5173 URL
 ```
 
-Production build (static files in `dist/`, can be hosted anywhere, including GitHub Pages):
+Production build (static files in `dist/`, can be hosted anywhere):
 
 ```bash
 npm run build
 npm run preview    # serve the built files locally
 ```
+
+**GitHub Pages:** `.github/workflows/pages.yml` tests, builds and publishes the game on every push to the default
+branch. One-time setup: *Settings → Pages → Build and deployment → Source: **GitHub Actions***. Don't use
+"Deploy from a branch": it publishes the unbuilt source code, which shows a blank page. The game is then at
+`https://<user>.github.io/<repo>/`. To publish by hand: *Actions → Publish to GitHub Pages → Run workflow*.
 
 Tests (save/load & migration to several pets, memory & preference logic, needs, walks, floppy ears):
 
